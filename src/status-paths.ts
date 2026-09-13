@@ -51,14 +51,17 @@ export interface WorkBuddyWebProbeSection {
 export interface WorkBuddyProbeAction {
   /**
    * `probe` spends credit on one model; `clear` drops recorded observations;
-   * `refresh` re-reads the credential and re-fetches the model catalog.
+   * `refresh` re-reads the credential and re-fetches the model catalog;
+   * `context-window` saves a model's selected context capacity.
    *
-   * All three are writes, which is why they share this route's in-process key
+   * All actions are writes, which is why they share this route's in-process key
    * and loopback guards rather than the read-only status GET.
    */
-  action: 'probe' | 'clear' | 'refresh'
-  /** Target model id; required for `probe`. */
+  action: 'probe' | 'clear' | 'refresh' | 'context-window'
+  /** Target model id; required for `probe` and `context-window`. */
   model?: string
+  /** Selected capacity; required for `context-window`. */
+  contextWindow?: number
 }
 
 /**
@@ -122,17 +125,12 @@ export interface WorkBuddyWebModelBadge {
    * be repeated. The card renders "refresh to see the price" instead.
    */
   rateUnknown?: true
-  /**
-   * Context capacity in tokens, taken verbatim from the upstream
-   * `maxAllowedSize`/`maxInputTokens`, or from the international document's
-   * `contextWindow.defaultLength` when it declares one.
-   *
-   * Reported, never chosen: the upstream describes one effective capacity per
-   * model, so the plugin displays what it was told rather than offering a menu
-   * of its own. (The desktop app's "300K / 1M" picker is client-side policy
-   * that appears nowhere in the catalog.)
-   */
+  /** Effective capacity: a supported user selection, or the catalog default. */
   contextWindow?: number
+  /** Original catalog capacity, used when no supported selection is saved. */
+  defaultContextWindow?: number
+  /** Valid selectable capacities declared by the catalog, sorted and deduplicated. */
+  supportedContextWindows?: readonly number[]
   /**
    * The international document's larger selectable window, when it declares
    * one, and the model's maximum input ceiling.

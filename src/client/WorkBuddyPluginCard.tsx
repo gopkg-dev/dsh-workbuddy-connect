@@ -102,6 +102,7 @@ const quotaLabelStyle: CSSProperties = { display: 'flex', justifyContent: 'space
 const modelBadgeStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }
 const modelOfferStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 2 }
 const modelRateStyle: CSSProperties = { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' }
+const contextSelectStyle: CSSProperties = { ...buttonStyle, minWidth: 104, borderRadius: 6, padding: '4px 8px' }
 const modelBadgeChipStyle: CSSProperties = {
   padding: '1px 8px', borderRadius: 999, fontSize: 11, lineHeight: '18px',
   background: 'var(--dsw-alias-state-success-subtle, rgba(34, 160, 107, 0.12))',
@@ -162,7 +163,7 @@ const tabStyle: CSSProperties = {
   borderBottom: '2px solid transparent',
   background: 'transparent',
   color: 'var(--dsw-alias-label-tertiary)',
-  font: 'inherit',
+  fontFamily: 'inherit',
   fontSize: 13,
   lineHeight: '20px',
   cursor: 'pointer',
@@ -283,17 +284,15 @@ function ModelOfferRow({ model, t }: {
  * reference data you scan by model, and hiding most of it behind a hover made
  * the common case (a model you already have in mind) the hard one to look up.
  *
- * Purely a report of the upstream's own numbers. The plugin offers no tier
- * picker: the CN catalog declares one capacity per model and publishes no
- * alternatives, so a menu there would mean inventing client-side policy. The
- * international document does declare alternatives (`supportedLengths`), and
- * they are shown as a secondary figure rather than merged into one number —
- * the default is the budget actually requested, while the larger value is a
- * ceiling the upstream would accept.
+ * Only upstream-declared alternatives are selectable. `contextWindow` is the
+ * host's effective budget, so a failed save leaves the previous value visible.
+ * Models without alternatives keep their default capacity as a static value.
  */
-function ContextTable({ models, t }: {
+function ContextTable({ models, t, disabled, onSelect }: {
   models: readonly WorkBuddyWebModelBadge[] | undefined
   t: WorkBuddyPluginCardInjected['t']
+  disabled: boolean
+  onSelect: (modelId: string, contextWindow: number) => void
 }): React.ReactNode {
   const known = (models ?? [])
     .filter(model => model.contextWindow !== undefined)
@@ -304,22 +303,33 @@ function ContextTable({ models, t }: {
   return (
     <div style={quotaListStyle}>
       <h3 style={quotaTitleStyle}>{t('contextHeading')}</h3>
+      <p style={bodyStyle}>{t('contextIntro')}</p>
       {known.map(model => {
         const capacity = model.contextWindow as number
-        // Only shown when the upstream declared a larger alternative, so the
-        // CN list (which declares none) is unchanged.
-        const alternative = model.maxContextWindow !== undefined && model.maxContextWindow > capacity
-          ? model.maxContextWindow
-          : undefined
+        const options = model.supportedContextWindows ?? []
         return (
           <div key={model.id} style={quotaLabelStyle}>
             <span>{model.name}</span>
-            <span style={modelOfferStyle}>
-              <span style={{ textAlign: 'right' }}>{formatTokens(capacity)}</span>
-              {alternative === undefined
-                ? null
-                : <span style={modelRateStyle}>{t('contextUpTo', { size: formatTokens(alternative) })}</span>}
-            </span>
+            {options.length > 0 ? (
+              <select
+                aria-label={t('contextSelectLabel', { model: model.name })}
+                style={contextSelectStyle}
+                value={capacity}
+                disabled={disabled}
+                onChange={event => { onSelect(model.id, Number(event.currentTarget.value)) }}
+              >
+                {options.includes(capacity) ? null : (
+                  <option value={capacity} disabled>{t('contextCurrentSize', { size: formatTokens(capacity) })}</option>
+                )}
+                {options.map(value => (
+                  <option key={value} value={value}>
+                    {value === model.defaultContextWindow
+                      ? t('contextDefaultSize', { size: formatTokens(value) })
+                      : formatTokens(value)}
+                  </option>
+                ))}
+              </select>
+            ) : <span>{formatTokens(capacity)}</span>}
           </div>
         )
       })}
@@ -491,10 +501,12 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<WorkBuddyWebStatus>({ status: 'signed-out' })
   const [busy, setBusy] = useState(false)
-  // Three tabs. Default is the live status plus the one action the card
-  // carries; the two reference sets — context capacity, then rates and the
-  // per-package breakdown — are deliberate visits, since neither changes while
-  // you watch.
+  const [contextFeedback, setContextFeedback] = useState<{ kind: 'saving' | 'saved' | 'error'; message: string }>()
+  // State updates render asynchronously; a ref also guards repeat events in
+  // the same turn and coordinates saves with the card's other control actions.
+  const actionInFlight = useRef(false)
+  const statusRequestVersion = useRef(0)
+  // Keep context configuration and credit details separate from live status.
   const [tab, setTab] = useState<'status' | 'context' | 'details'>('status')
   const mounted = useRef(true)
 
@@ -503,25 +515,32 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
     return () => { mounted.current = false }
   }, [])
 
+  const loadStatus = useCallback(async (signal?: AbortSignal): Promise<WorkBuddyWebStatus> => {
+    const response = await fetch(variant.statusPath, {
+      headers: { accept: 'application/json' },
+      credentials: 'same-origin',
+      ...signal === undefined ? {} : { signal },
+    })
+    const value: unknown = await response.json().catch(() => undefined)
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    if (value === undefined) throw new Error(t('requestFailed'))
+    return value as WorkBuddyWebStatus
+  }, [t, variant.statusPath])
+
   const refresh = useCallback(async (signal?: AbortSignal): Promise<void> => {
+    const version = ++statusRequestVersion.current
     try {
-      const response = await fetch(variant.statusPath, {
-        headers: { accept: 'application/json' },
-        credentials: 'same-origin',
-        ...signal === undefined ? {} : { signal },
-      })
-      const value: unknown = await response.json().catch(() => undefined)
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      if (mounted.current && signal?.aborted !== true) setStatus(value as WorkBuddyWebStatus)
+      const value = await loadStatus(signal)
+      if (mounted.current && signal?.aborted !== true && version === statusRequestVersion.current) setStatus(value)
     } catch (error: unknown) {
-      if (mounted.current && signal?.aborted !== true) {
+      if (mounted.current && signal?.aborted !== true && version === statusRequestVersion.current) {
         setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
       }
     }
-  }, [t, variant.statusPath])
+  }, [loadStatus, t])
 
   useEffect(() => {
-    if (!open) return
+    if (!open || actionInFlight.current) return
     const controller = new AbortController()
     void refresh(controller.signal)
     return () => { controller.abort() }
@@ -530,7 +549,9 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
   useEffect(() => {
     if (!open || status.status !== 'signed-in') return
     const controller = new AbortController()
-    const timer = window.setInterval(() => { void refresh(controller.signal) }, POLL_INTERVAL_MS)
+    const timer = window.setInterval(() => {
+      if (!actionInFlight.current) void refresh(controller.signal)
+    }, POLL_INTERVAL_MS)
     return () => {
       window.clearInterval(timer)
       controller.abort()
@@ -538,10 +559,13 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
   }, [open, refresh, status.status])
 
   const manualRefresh = async (): Promise<void> => {
+    if (actionInFlight.current) return
+    actionInFlight.current = true
     setBusy(true)
     try {
       await refresh()
     } finally {
+      actionInFlight.current = false
       if (mounted.current) setBusy(false)
     }
   }
@@ -556,7 +580,8 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
    */
   const refreshModels = useCallback(async (): Promise<void> => {
     const key = status.status === 'signed-in' ? status.probeKey : undefined
-    if (key === undefined) return
+    if (key === undefined || actionInFlight.current) return
+    actionInFlight.current = true
     setBusy(true)
     try {
       const response = await fetch(variant.probePath, {
@@ -566,15 +591,16 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
         body: JSON.stringify({ action: 'refresh' }),
       })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      await refresh()
     } catch (error: unknown) {
       if (mounted.current) {
         setStatus(previous => ({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') }))
       }
       return
     } finally {
+      actionInFlight.current = false
       if (mounted.current) setBusy(false)
     }
-    await refresh()
   }, [refresh, status, t, variant.probePath])
 
   /**
@@ -586,7 +612,8 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
    */
   const control = useCallback(async (action: { action: 'probe'; model: string } | { action: 'clear' }): Promise<void> => {
     const key = status.status === 'signed-in' ? status.probeKey : undefined
-    if (key === undefined) return
+    if (key === undefined || actionInFlight.current) return
+    actionInFlight.current = true
     setBusy(true)
     try {
       const response = await fetch(variant.probePath, {
@@ -608,9 +635,62 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
         setStatus(previous => ({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') }))
       }
     } finally {
+      actionInFlight.current = false
       if (mounted.current) setBusy(false)
     }
   }, [refresh, status, t, variant.probePath])
+
+  const saveContextWindow = useCallback(async (modelId: string, contextWindow: number): Promise<void> => {
+    if (status.status !== 'signed-in' || status.probeKey === undefined || actionInFlight.current) return
+    const model = status.models?.find(entry => entry.id === modelId)
+    if (model === undefined || model.contextWindow === contextWindow || !model.supportedContextWindows?.includes(contextWindow)) return
+    actionInFlight.current = true
+    // A poll started before this write must not overwrite its refreshed value.
+    ++statusRequestVersion.current
+    setBusy(true)
+    const params = { model: model.name, size: formatTokens(contextWindow) }
+    setContextFeedback({ kind: 'saving', message: t('contextSaving', params) })
+    let saved = false
+    try {
+      const response = await fetch(variant.probePath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': status.probeKey },
+        credentials: 'same-origin',
+        body: JSON.stringify({ action: 'context-window', model: modelId, contextWindow }),
+      })
+      const value: unknown = await response.json().catch(() => undefined)
+      if (!response.ok) {
+        const message = typeof value === 'object' && value !== null && 'error' in value
+          ? String((value as Record<string, unknown>)['error'])
+          : `HTTP ${response.status}`
+        throw new Error(message)
+      }
+      saved = true
+      // Read without the general refresh's error replacement: even if this
+      // GET fails, keep the model controls available for refresh or retry.
+      const updated = await loadStatus()
+      if (updated.status !== 'signed-in') {
+        throw new Error(updated.status === 'error' ? updated.message : updated.reason ?? t('signedOut'))
+      }
+      if (mounted.current) {
+        setStatus(updated)
+        setContextFeedback({ kind: 'saved', message: t('contextSaved', params) })
+      }
+    } catch (error: unknown) {
+      if (mounted.current) {
+        setContextFeedback({
+          kind: 'error',
+          message: t(saved ? 'contextRefreshFailed' : 'contextSaveFailed', {
+            ...params,
+            message: error instanceof Error ? error.message : t('requestFailed'),
+          }),
+        })
+      }
+    } finally {
+      actionInFlight.current = false
+      if (mounted.current) setBusy(false)
+    }
+  }, [loadStatus, status, t, variant.probePath])
 
   /**
    * Start a detection. Confirmation happens inline in the section, so this is
@@ -741,7 +821,17 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                     </div>
                   ) : tab === 'context' ? (
                     <div style={tabPanelStyle}>
-                      <ContextTable models={status.models} t={t} />
+                      {contextFeedback === undefined ? null : (
+                        <p role={contextFeedback.kind === 'error' ? 'alert' : 'status'} style={contextFeedback.kind === 'error' ? errorStyle : bodyStyle}>
+                          {contextFeedback.message}
+                        </p>
+                      )}
+                      <ContextTable
+                        models={status.models}
+                        t={t}
+                        disabled={busy || status.probeKey === undefined}
+                        onSelect={(modelId, contextWindow) => { void saveContextWindow(modelId, contextWindow) }}
+                      />
                     </div>
                   ) : (
                     <div style={tabPanelStyle}>

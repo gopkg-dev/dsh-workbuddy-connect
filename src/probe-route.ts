@@ -25,6 +25,8 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { hostIsLoopback, originIsLoopback } from './loopback.ts'
 import { WORKBUDDY_PROBE_PATH } from './status-paths.ts'
 import type { WorkBuddyProbeAction } from './status-paths.ts'
+import type { WorkBuddyModelInfo } from './catalog.ts'
+import { supportedContextWindows } from './context-windows.ts'
 
 /** Largest control body accepted; these payloads are a few dozen bytes. */
 const MAX_BODY_BYTES = 4096
@@ -47,6 +49,10 @@ export interface WorkBuddyProbeRouteOptions {
    * as authorizing an action. Requires the same in-process key as `probe`.
    */
   refresh?: () => Promise<{ state: string; reason?: string }>
+  /** Current catalog used to validate a context-window write. */
+  models?: () => readonly WorkBuddyModelInfo[]
+  /** Persist one validated selection. False means settings are unavailable. */
+  setContextWindow?: (modelId: string, contextWindow: number) => Promise<boolean>
   /**
    * Route path to mount. Defaults to the CN variant's path so existing callers
    * and tests keep their behaviour; the international variant passes its own.
@@ -108,6 +114,13 @@ function parseAction(text: string): WorkBuddyProbeAction | undefined {
     if (typeof model !== 'string' || model.trim() === '') return undefined
     return { action: 'probe', model: model.trim() }
   }
+  if (action === 'context-window') {
+    const model = wrapped['model']
+    const contextWindow = wrapped['contextWindow']
+    if (typeof model !== 'string' || model.trim() === '') return undefined
+    if (typeof contextWindow !== 'number' || !Number.isSafeInteger(contextWindow) || contextWindow <= 0) return undefined
+    return { action: 'context-window', model: model.trim(), contextWindow }
+  }
   return undefined
 }
 
@@ -154,6 +167,28 @@ export function workBuddyProbeHandler(
           return
         }
         json(res, 200, await deps.refresh())
+        return
+      }
+      if (action.action === 'context-window') {
+        if (deps.setContextWindow === undefined) {
+          json(res, 503, { error: 'context-window-settings-unavailable' })
+          return
+        }
+        const model = deps.models?.().find(info => info.id === action.model)
+        if (model === undefined) {
+          json(res, 400, { error: 'unknown-model' })
+          return
+        }
+        const contextWindow = action.contextWindow as number
+        if (!supportedContextWindows(model).includes(contextWindow)) {
+          json(res, 400, { error: 'unsupported-context-window' })
+          return
+        }
+        if (!await deps.setContextWindow(model.id, contextWindow)) {
+          json(res, 503, { error: 'context-window-settings-unavailable' })
+          return
+        }
+        json(res, 200, { state: 'updated', model: model.id, contextWindow })
         return
       }
       json(res, 200, await deps.probe(action.model as string))

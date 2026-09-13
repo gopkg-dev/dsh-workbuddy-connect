@@ -1,8 +1,9 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import SettingsProvider from '@deepseek-ai/dsh-settings'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
@@ -24,6 +25,22 @@ class MemorySettings extends SettingsProvider {
 
 let context: Context | undefined
 let root: string | undefined
+let server: Server | undefined
+
+/** Capture the real plugin route wiring while keeping the host fixture small. */
+class TestWebServer extends Service {
+  static routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>()
+
+  constructor(ctx: Context) {
+    super(ctx, 'webServer')
+    TestWebServer.routes = new Map()
+  }
+
+  register(route: { path: string; handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }): () => void {
+    TestWebServer.routes.set(route.path, route.handler)
+    return () => { TestWebServer.routes.delete(route.path) }
+  }
+}
 
 /** A desktop-shaped credential document for one upstream region. */
 function credentialDocument(domain: string): string {
@@ -34,6 +51,8 @@ function credentialDocument(domain: string): string {
 }
 
 afterEach(async () => {
+  if (server !== undefined) await new Promise<void>(resolve => server?.close(() => resolve()))
+  server = undefined
   await context?.fiber.dispose()
   context = undefined
   if (root !== undefined) await rm(root, { recursive: true, force: true })
@@ -43,9 +62,99 @@ afterEach(async () => {
 })
 
 describe('WorkBuddy Host settings integration', () => {
+  it('persists context selections per variant, merges concurrent writes, and restores them after restart', async () => {
+    root = await mkdtemp(join(tmpdir(), 'dsh-workbuddy-context-settings-'))
+    vi.stubEnv('DSH_HOME', root)
+    const nativeFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline in tests') }))
+    const snapshots = new Map<string, string>()
+    for (const variant of WorkBuddy.WORKBUDDY_VARIANTS) {
+      const auth = join(root, `${variant.id}.info`)
+      await writeFile(auth, credentialDocument(variant.id === 'workbuddy' ? 'copilot.tencent.com' : 'www.workbuddy.ai'))
+      vi.stubEnv(variant.id === 'workbuddy' ? 'WORKBUDDY_AUTH_FILE' : 'WORKBUDDY_AI_AUTH_FILE', auth)
+      const catalogPath = join(root, variant.catalogFilename)
+      new WorkBuddy.WorkBuddyCatalogStore(catalogPath).set('uid-1:ent-1', {
+        source: 'test', fetchedAtMs: Date.now(),
+        models: ['shared-model', 'other-model'].map(id => ({
+          id, name: id, contextWindow: 300_000, maxInputTokens: 1_000_000, maxTokens: 64_000, supportsImages: false,
+          supportedContextWindows: [300_000, variant.id === 'workbuddy' ? 600_000 : 1_000_000],
+        })),
+      })
+      snapshots.set(catalogPath, await readFile(catalogPath, 'utf8'))
+    }
+    const persisted: Record<string, Record<string, unknown>> = {}
+    class PersistentSettings extends SettingsProvider {
+      readonly writable = true
+      protected load(): Promise<Record<string, unknown>> { return Promise.resolve(structuredClone(persisted)) }
+      protected persist(ns: SettingsNamespace, section: Record<string, unknown>): Promise<void> {
+        persisted[ns] = structuredClone(section)
+        return Promise.resolve()
+      }
+    }
+    const boot = async (): Promise<Context> => {
+      const ctx = new Context()
+      context = ctx
+      await ctx.plugin(LlmRuntime)
+      await ctx.plugin(PersistentSettings)
+      await ctx.plugin(TestWebServer)
+      await ctx.plugin(WorkBuddy, {})
+      await vi.waitFor(async () => {
+        expect((await ctx.llm.listModels('workbuddy-ai')).map(model => model.id)).toContain('shared-model')
+        expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toContain('shared-model')
+      })
+      return ctx
+    }
+    let ctx = await boot()
+    server = createServer((req, res) => {
+      const handler = TestWebServer.routes.get(new URL(req.url ?? '/', 'http://127.0.0.1').pathname)
+      if (handler === undefined) { res.writeHead(404).end(); return }
+      void handler(req, res)
+    })
+    await new Promise<void>(resolve => server?.listen(0, '127.0.0.1', resolve))
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    const status = await (await nativeFetch(`${origin}${WorkBuddy.AI_VARIANT.statusPath}`)).json() as { probeKey: string }
+    const select = async (variant: WorkBuddy.WorkBuddyVariant, model: string, contextWindow: number): Promise<void> => {
+      const response = await nativeFetch(`${origin}${variant.probePath}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': status.probeKey },
+        body: JSON.stringify({ action: 'context-window', model, contextWindow }),
+      })
+      expect(response.status).toBe(200)
+    }
+    await Promise.all([
+      select(WorkBuddy.AI_VARIANT, 'shared-model', 1_000_000),
+      select(WorkBuddy.AI_VARIANT, 'other-model', 1_000_000),
+      select(WorkBuddy.CN_VARIANT, 'shared-model', 600_000),
+    ])
+    expect(persisted['workbuddy-ai']).toEqual({ modelContextWindowsAI: { 'shared-model': 1_000_000, 'other-model': 1_000_000 } })
+    expect(persisted['workbuddy']).toEqual({ modelContextWindows: { 'shared-model': 600_000 } })
+    expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'shared-model')).context?.contextWindow).toBe(1_000_000)
+    expect((await ctx.llm.resolveModelInfo('workbuddy', 'shared-model')).context?.contextWindow).toBe(600_000)
+    const updatedStatus = await (await nativeFetch(`${origin}${WorkBuddy.AI_VARIANT.statusPath}`)).json() as { models: Record<string, unknown>[] }
+    expect(updatedStatus.models.find(model => model['id'] === 'shared-model')).toMatchObject({ contextWindow: 1_000_000, defaultContextWindow: 300_000 })
+
+    // Direct settings edits also invalidate snapshots; stale positive values
+    // may remain saved, but cannot override the current catalog's choices.
+    await ctx.settings.update('workbuddy-ai', { modelContextWindowsAI: { 'shared-model': 500_000 } })
+    await vi.waitFor(async () => {
+      expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'shared-model')).context?.contextWindow).toBe(300_000)
+    })
+    await select(WorkBuddy.AI_VARIANT, 'shared-model', 1_000_000)
+    await expect(ctx.settings.update('workbuddy-ai', { modelContextWindowsAI: { 'shared-model': 0 } })).rejects.toThrow()
+    await ctx.fiber.dispose()
+    ctx = await boot()
+    expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'shared-model')).context?.contextWindow).toBe(1_000_000)
+    expect((await ctx.llm.resolveModelInfo('workbuddy', 'shared-model')).context?.contextWindow).toBe(600_000)
+    for (const [path, snapshot] of snapshots) expect(await readFile(path, 'utf8')).toBe(snapshot)
+  })
+
   it('exposes the provider directory entry, the settings section, and the fallback model list', async () => {
     root = await mkdtemp(join(tmpdir(), 'dsh-workbuddy-connect-settings-'))
     vi.stubEnv('DSH_HOME', root)
+    const cnFile = join(root, 'cn.info')
+    await writeFile(cnFile, credentialDocument('copilot.tencent.com'))
+    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
+    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent-ai.info'))
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline in tests') }))
     const ctx = new Context()
     context = ctx
     await ctx.plugin(LlmRuntime)
@@ -68,6 +177,9 @@ describe('WorkBuddy Host settings integration', () => {
     const descriptor = ctx.settings.describe().find(entry => entry.ns === WorkBuddy.WORKBUDDY_SETTINGS_NS)
     expect(descriptor).toBeDefined()
 
+    await vi.waitFor(async () => {
+      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toContain('auto')
+    })
     const models = await ctx.llm.listModels('workbuddy')
     expect(models.map(model => model.id)).toContain('auto')
     expect(models.map(model => model.id)).toContain('deepseek-v4-pro')
@@ -178,7 +290,9 @@ describe('WorkBuddy Host settings integration', () => {
     }
     expect(fieldsOf('workbuddy')).toContain('authFile')
     expect(fieldsOf('workbuddy')).not.toContain('authFileAI')
-    expect(fieldsOf('workbuddy-ai')).toEqual(['authFileAI'])
+    expect(fieldsOf('workbuddy')).toContain('modelContextWindows')
+    expect(fieldsOf('workbuddy')).not.toContain('modelContextWindowsAI')
+    expect(fieldsOf('workbuddy-ai')).toEqual(['authFileAI', 'modelContextWindowsAI'])
 
     // A write through one section must reach ONLY that variant's store. The
     // schema assertions above prove the two forms are split; this proves the

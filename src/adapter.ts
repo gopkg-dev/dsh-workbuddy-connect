@@ -19,6 +19,7 @@ import type { WorkBuddyCatalog, WorkBuddyModelInfo } from './catalog.ts'
 import type { WorkBuddyProbeRecord } from './probe-store.ts'
 import type { WorkBuddyShim } from './shim.ts'
 import { normalizeCredits } from './upstream.ts'
+import { resolveContextWindow } from './context-windows.ts'
 
 /** Provider route this bundle owns. */
 export const WORKBUDDY_PROVIDER = 'workbuddy'
@@ -117,6 +118,8 @@ export interface WorkBuddyAdapterOptions {
   shim: WorkBuddyShim
   store: WorkBuddyCredentialStore
   catalog: WorkBuddyCatalog
+  /** Read this variant's saved per-model context preference at snapshot time. */
+  contextWindowFor?: (modelId: string) => number | undefined
   /** Resolve the durable attachment service at request time, when present. */
   resolveAttachments?: () => AttachmentStore | undefined
   /**
@@ -200,7 +203,7 @@ export function reasoningFields(
 }
 
 /** Build one pi-ai model descriptor pointing at the loopback shim. */
-function toPiModel(info: WorkBuddyModelInfo, baseUrl: string, observed?: WorkBuddyProbeRecord, providerId = WORKBUDDY_PROVIDER): Model<Api> {
+function toPiModel(info: WorkBuddyModelInfo, baseUrl: string, observed?: WorkBuddyProbeRecord, providerId = WORKBUDDY_PROVIDER, contextWindow?: number): Model<Api> {
   return {
     id: info.id,
     name: info.name,
@@ -210,7 +213,7 @@ function toPiModel(info: WorkBuddyModelInfo, baseUrl: string, observed?: WorkBud
     input: info.supportsImages === true ? ['text', 'image'] : ['text'],
     ...reasoningFields(info, observed),
     cost: NO_COST,
-    contextWindow: info.contextWindow,
+    contextWindow: resolveContextWindow(info, contextWindow),
     maxTokens: info.maxTokens,
     // pi-ai cannot infer WorkBuddy's field spelling from the shim's random
     // loopback URL, so name the upstream-required field explicitly.
@@ -219,9 +222,9 @@ function toPiModel(info: WorkBuddyModelInfo, baseUrl: string, observed?: WorkBud
 }
 
 /**
- * Assemble the adapter. The provider's `getModels` reads the live catalog,
- * and every model's `baseUrl` is re-resolved per read so the shim's
- * ephemeral port applies from the first snapshot after startup.
+ * Assemble the adapter. Each invalidation snapshots the live catalog and
+ * saved window choices, leaving any in-flight call's descriptors untouched.
+ * Every snapshot also resolves the shim's current ephemeral port.
  *
  * The profile is constructed by hand rather than through dsh-llm-pi-ai's
  * internal `resolveProfiles()`: that helper is not part of the package's
@@ -239,7 +242,7 @@ export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBu
     // The OpenAI SDK pi-ai drives appends `/chat/completions` to baseURL,
     // so the shim's routes line up with the `/v1` prefix in place.
     const baseUrl = `${shim.baseUrl()}/v1`
-    return catalog.current().map(info => toPiModel(info, baseUrl, observe?.(info.id), providerId))
+    return catalog.current().map(info => toPiModel(info, baseUrl, observe?.(info.id), providerId, options.contextWindowFor?.(info.id)))
   }
 
   const base = createProvider({
@@ -260,10 +263,10 @@ export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBu
     api: openAICompletionsApi(),
   })
 
-  // `getModels` is delegated to a live read (the reuse-catalog pattern from
-  // dsh-llm-pi-ai): stream dispatch still runs through the constructed
-  // provider, while the catalog answer tracks the upstream refresh.
-  const provider: Provider = { ...base, getModels: () => buildModels() }
+  // pi-ai resolves descriptors lazily. Keep each provider's list stable so a
+  // settings change cannot alter a call that already captured this snapshot.
+  const buildProvider = (models: Model<Api>[]): Provider => ({ ...base, getModels: () => models })
+  const initialModels = buildModels()
 
   const profile: ResolvedPiAiProviderProfile = {
     provider: providerId,
@@ -275,13 +278,26 @@ export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBu
     // probed successfully, so there is never a per-model failure to report.
     modelErrors: new Map(),
     ...REQUEST_IMAGE_BUDGETS,
-    piProvider: provider,
+    piProvider: buildProvider(initialModels),
   }
 
   let profiles = new Map<string, ResolvedPiAiProviderProfile>([[providerId, profile]])
+  let modelSignature = JSON.stringify(initialModels)
+  const refreshProfiles = (force = false): typeof profiles => {
+    // Probe observations can expire without an explicit invalidation. Resolve
+    // their live state on each new operation, but retain stable descriptors for
+    // operations already in flight and reuse the snapshot while facts agree.
+    const models = buildModels()
+    const signature = JSON.stringify(models)
+    if (force || signature !== modelSignature) {
+      profiles = new Map([[providerId, { ...profile, piProvider: buildProvider(models) }]])
+      modelSignature = signature
+    }
+    return profiles
+  }
 
   const adapter = new WorkBuddyPiAiAdapter(catalog, {
-    profiles: () => profiles,
+    profiles: () => refreshProfiles(),
     auth: INERT_AUTH,
     // Resolve the shim's per-process shared secret as the OpenAI apiKey so
     // pi-ai sends it as `Authorization: Bearer <shared-secret>`. The shim
@@ -294,7 +310,7 @@ export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBu
   return {
     adapter,
     invalidate: () => {
-      profiles = new Map<string, ResolvedPiAiProviderProfile>([[providerId, profile]])
+      refreshProfiles(true)
     },
   }
 }

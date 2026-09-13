@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { WorkBuddyPluginCard } from '../src/client/WorkBuddyPluginCard.tsx'
+import { AI_CARD_VARIANT, CN_CARD_VARIANT, WorkBuddyPluginCard, type WorkBuddyCardVariant } from '../src/client/WorkBuddyPluginCard.tsx'
 import { en } from '../src/client/locales.ts'
 
 /**
@@ -21,6 +21,7 @@ describe('WorkBuddy plugin card', () => {
   let statusBody: Record<string, unknown>
   /** Resolvers for in-flight POSTs, so a run can be held open deliberately. */
   let pendingPosts: (() => void)[] = []
+  let poll: (() => void) | undefined
   const request = vi.fn()
 
   function status(overrides: Record<string, unknown> = {}): void {
@@ -44,6 +45,7 @@ describe('WorkBuddy plugin card', () => {
   beforeEach(() => {
     status()
     pendingPosts = []
+    poll = undefined
     request.mockReset().mockImplementation(async (_url: string, init?: RequestInit) => {
       if (init?.method !== 'POST') return { ok: true, json: async () => statusBody }
       // Hold the POST open until the test releases it, so "in flight" is
@@ -53,7 +55,7 @@ describe('WorkBuddy plugin card', () => {
     })
     vi.stubGlobal('fetch', request)
     vi.stubGlobal('window', {
-      setInterval: () => 1,
+      setInterval: (callback: () => void) => { poll = callback; return 1 },
       clearInterval: () => {},
       addEventListener: () => {},
       removeEventListener: () => {},
@@ -67,10 +69,10 @@ describe('WorkBuddy plugin card', () => {
   })
 
   /** Mount the card and expand it so the probe section renders. */
-  async function mount(): Promise<void> {
+  async function mount(variant?: WorkBuddyCardVariant): Promise<void> {
     // The card only reads `t`; the remaining props belong to the slot that
     // mounts it in DSH, so the test supplies the one it uses.
-    const props = { t } as unknown as Parameters<typeof WorkBuddyPluginCard>[0]
+    const props = { t, ...(variant === undefined ? {} : { variant }) } as unknown as Parameters<typeof WorkBuddyPluginCard>[0]
     await act(async () => { view = create(createElement(WorkBuddyPluginCard, props)) })
     await act(async () => { view!.root.findAllByType('button')[0]!.props.onClick() })
   }
@@ -197,5 +199,163 @@ describe('WorkBuddy plugin card', () => {
     const rendered = JSON.stringify(view!.toJSON())
     expect(rendered).toContain('Signed in as')
     expect(rendered).not.toContain('Signed in as ')
+  })
+
+  describe('context window settings', () => {
+    const model = {
+      id: 'hy4-preview',
+      name: 'Hy4 preview',
+      contextWindow: 300_000,
+      defaultContextWindow: 300_000,
+      supportedContextWindows: [300_000, 1_000_000],
+    }
+    const select = () => view!.root.findAllByType('select')[0]!
+    const posts = () => request.mock.calls.filter(([, init]) => init?.method === 'POST')
+    const change = async (value: number): Promise<void> => {
+      await act(async () => { select().props.onChange({ currentTarget: { value: String(value) } }) })
+    }
+
+    it('offers the declared sizes, labels the default, and keeps models without sizes static', async () => {
+      statusBody.models = [
+        model,
+        { id: 'default', name: 'Default model', contextWindow: 272_000 },
+        { id: 'empty', name: 'Empty sizes', contextWindow: 192_000, supportedContextWindows: [] },
+      ]
+      await mount()
+      await press(en.tabContext)
+
+      expect(view!.root.findAllByType('select')).toHaveLength(1)
+      expect(select().props.value).toBe(300_000)
+      expect(select().props['aria-label']).toBe(t('contextSelectLabel', { model: model.name }))
+      expect(select().findAllByType('option').map(option => [option.props.value, option.children.join('')])).toEqual([
+        [300_000, '300K (default)'],
+        [1_000_000, '1M'],
+      ])
+      const rendered = JSON.stringify(view!.toJSON())
+      expect(rendered).toContain('Default model')
+      expect(rendered).toContain('272K')
+      expect(rendered).toContain('Empty sizes')
+      expect(rendered).toContain('192K')
+    })
+
+    it.each([CN_CARD_VARIANT, AI_CARD_VARIANT])('saves and refreshes the effective window through $id routes', async variant => {
+      statusBody.models = [model]
+      await mount(variant)
+      await press(en.tabContext)
+      await change(1_000_000)
+
+      expect(posts()).toHaveLength(1)
+      expect(posts()[0]![0]).toBe(variant.probePath)
+      expect(posts()[0]![1]).toMatchObject({
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': 'test-key' },
+      })
+      expect(JSON.parse(posts()[0]![1].body)).toEqual({ action: 'context-window', model: model.id, contextWindow: 1_000_000 })
+      expect(select().props.disabled).toBe(true)
+      expect(JSON.stringify(view!.toJSON())).toContain(t('contextSaving', { model: model.name, size: '1M' }))
+
+      statusBody = { ...statusBody, models: [{ ...model, contextWindow: 1_000_000 }] }
+      await act(async () => { for (const release of pendingPosts.splice(0)) release() })
+
+      expect(request.mock.calls.map(([url, init]) => [url, init?.method ?? 'GET'])).toEqual([
+        [variant.statusPath, 'GET'],
+        [variant.probePath, 'POST'],
+        [variant.statusPath, 'GET'],
+      ])
+      expect(select().props.value).toBe(1_000_000)
+      expect(select().props.disabled).toBe(false)
+      expect(JSON.stringify(view!.toJSON())).toContain(t('contextSaved', { model: model.name, size: '1M' }))
+    })
+
+    it('shows the current capacity without making an undeclared size selectable', async () => {
+      statusBody.models = [{ ...model, supportedContextWindows: [1_000_000] }]
+      await mount()
+      await press(en.tabContext)
+
+      expect(select().props.value).toBe(300_000)
+      const options = select().findAllByType('option')
+      expect(options.map(option => option.props.value)).toEqual([300_000, 1_000_000])
+      expect(options[0]!.props.disabled).toBe(true)
+      expect(options[0]!.children.join('')).toBe(t('contextCurrentSize', { size: '300K' }))
+      expect(options[1]!.props.disabled).not.toBe(true)
+    })
+
+    it('ignores a stale poll that finishes after a context save', async () => {
+      statusBody.models = [model]
+      await mount()
+      await press(en.tabContext)
+      const oldStatus = statusBody
+      let finishPoll: (() => void) | undefined
+      request.mockImplementationOnce(async () => {
+        await new Promise<void>(resolve => { finishPoll = resolve })
+        return { ok: true, json: async () => oldStatus }
+      })
+      await act(async () => { poll!() })
+      await change(1_000_000)
+      statusBody = { ...statusBody, models: [{ ...model, contextWindow: 1_000_000 }] }
+      await act(async () => { for (const release of pendingPosts.splice(0)) release() })
+      expect(select().props.value).toBe(1_000_000)
+
+      await act(async () => { finishPoll!() })
+      expect(select().props.value).toBe(1_000_000)
+    })
+
+    it('blocks duplicate and concurrent saves until the first update settles', async () => {
+      statusBody.models = [model, { ...model, id: 'another', name: 'Another model' }]
+      await mount()
+      await press(en.tabContext)
+      const selectors = view!.root.findAllByType('select')
+      await act(async () => {
+        selectors[0]!.props.onChange({ currentTarget: { value: '1000000' } })
+        selectors[0]!.props.onChange({ currentTarget: { value: '1000000' } })
+        selectors[1]!.props.onChange({ currentTarget: { value: '1000000' } })
+      })
+      expect(posts()).toHaveLength(1)
+      expect(view!.root.findAllByType('select').every(node => node.props.disabled)).toBe(true)
+    })
+
+    it('keeps the old value and controls available when saving fails', async () => {
+      statusBody.models = [model]
+      await mount()
+      await press(en.tabContext)
+      request.mockImplementationOnce(async () => ({ ok: false, status: 400, json: async () => ({ error: 'Unsupported context window' }) }))
+      await change(1_000_000)
+
+      expect(select().props.value).toBe(300_000)
+      expect(select().props.disabled).toBe(false)
+      expect(view!.root.findByProps({ role: 'alert' }).children.join('')).toBe(t('contextSaveFailed', { message: 'Unsupported context window' }))
+      expect(request.mock.calls).toHaveLength(2)
+    })
+
+    it('keeps controls available and reports when saving succeeded but refresh failed', async () => {
+      statusBody.models = [model]
+      await mount()
+      await press(en.tabContext)
+      request.mockImplementationOnce(async () => ({ ok: true, json: async () => ({ state: 'ok' }) }))
+      request.mockImplementationOnce(async () => { throw new Error('Network unavailable') })
+      await change(1_000_000)
+
+      expect(select().props.value).toBe(300_000)
+      expect(select().props.disabled).toBe(false)
+      expect(view!.root.findByProps({ role: 'alert' }).children.join('')).toBe(t('contextRefreshFailed', {
+        model: model.name, size: '1M', message: 'Network unavailable',
+      }))
+    })
+
+    it('does not write without a key or when a value is unchanged or unsupported', async () => {
+      statusBody.models = [model]
+      await mount()
+      await press(en.tabContext)
+      await change(300_000)
+      await change(500_000)
+      expect(posts()).toHaveLength(0)
+
+      delete statusBody.probeKey
+      await press(en.refresh)
+      expect(select().props.disabled).toBe(true)
+      await change(1_000_000)
+      expect(posts()).toHaveLength(0)
+    })
   })
 })

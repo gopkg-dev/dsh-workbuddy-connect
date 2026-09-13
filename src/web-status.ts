@@ -13,6 +13,7 @@ import type { WorkBuddyCredentialStore } from './auth.ts'
 import type { WorkBuddyUpstreamClient } from './upstream.ts'
 import { normalizeCredits } from './upstream.ts'
 import type { WorkBuddyModelInfo } from './catalog.ts'
+import { declaredContextWindows, resolveContextWindow } from './context-windows.ts'
 import { hostIsLoopback, originIsLoopback } from './loopback.ts'
 import { WORKBUDDY_STATUS_PATH } from './status-paths.ts'
 import type { WorkBuddyWebCatalog, WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus } from './status-paths.ts'
@@ -26,6 +27,8 @@ export interface WorkBuddyStatusRouteOptions {
   client: Pick<WorkBuddyUpstreamClient, 'fetchCredits'>
   /** Resolve the current model catalog for free/badge display. */
   models: () => readonly WorkBuddyModelInfo[]
+  /** Live per-model user selection; invalid or stale values use the catalog default. */
+  contextWindowFor?: (modelId: string) => number | undefined
   /**
    * Compact probe state for the card. Optional so the status route keeps
    * working on its own in tests and headless profiles.
@@ -111,8 +114,9 @@ export async function workBuddyWebStatus(
       // The largest window the upstream declares for this model, when it
       // declares alternatives; equal to `contextWindow` otherwise, and omitted
       // when the upstream said nothing.
-      const supported = model.supportedContextWindows ?? []
+      const supported = declaredContextWindows(model)
       const maxContextWindow = supported.length > 0 ? Math.max(...supported) : undefined
+      const contextWindow = resolveContextWindow(model, deps.contextWindowFor?.(model.id))
       return {
         id: model.id,
         name: model.name,
@@ -124,11 +128,14 @@ export async function workBuddyWebStatus(
         // cached row): the card then says the price needs a refresh instead of
         // repeating a stale figure or implying the model is free.
         ...model.billing?.rateUnknown === true ? { rateUnknown: true as const } : {},
-        // Verbatim from the upstream catalog; omitted when it said nothing.
-        ...typeof model.contextWindow === 'number' && model.contextWindow > 0
-          ? { contextWindow: model.contextWindow }
+        ...Number.isSafeInteger(contextWindow) && contextWindow > 0
+          ? { contextWindow }
           : {},
-        ...maxContextWindow === undefined || maxContextWindow === model.contextWindow
+        ...Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
+          ? { defaultContextWindow: model.contextWindow }
+          : {},
+        ...supported.length > 0 ? { supportedContextWindows: supported } : {},
+        ...maxContextWindow === undefined || maxContextWindow === contextWindow
           ? {}
           : { maxContextWindow },
         ...typeof model.maxInputTokens === 'number' && model.maxInputTokens > 0

@@ -795,6 +795,8 @@ interface WorkBuddyAdapterOptions {
   shim: WorkBuddyShim;
   store: WorkBuddyCredentialStore;
   catalog: WorkBuddyCatalog;
+  /** Read this variant's saved per-model context preference at snapshot time. */
+  contextWindowFor?: (modelId: string) => number | undefined;
   /** Resolve the durable attachment service at request time, when present. */
   resolveAttachments?: () => AttachmentStore | undefined;
   /**
@@ -810,9 +812,9 @@ interface WorkBuddyAdapter {
   invalidate: () => void;
 }
 /**
- * Assemble the adapter. The provider's `getModels` reads the live catalog,
- * and every model's `baseUrl` is re-resolved per read so the shim's
- * ephemeral port applies from the first snapshot after startup.
+ * Assemble the adapter. Each invalidation snapshots the live catalog and
+ * saved window choices, leaving any in-flight call's descriptors untouched.
+ * Every snapshot also resolves the shim's current ephemeral port.
  *
  * The profile is constructed by hand rather than through dsh-llm-pi-ai's
  * internal `resolveProfiles()`: that helper is not part of the package's
@@ -1038,6 +1040,10 @@ interface Config {
   authFile?: string;
   /** Explicit WorkBuddy AI (international) desktop auth-file path, overriding env and platform defaults. */
   authFileAI?: string;
+  /** Selected context capacity per WorkBuddy CN model. */
+  modelContextWindows?: Record<string, number>;
+  /** Selected context capacity per WorkBuddy AI model. */
+  modelContextWindowsAI?: Record<string, number>;
   /**
    * Whether the user has authorized sending probe requests about reasoning
    * efforts. Off by default: a probe spends real credit, so nothing is sent

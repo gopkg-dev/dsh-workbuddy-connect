@@ -204,6 +204,10 @@ export interface Config {
   authFile?: string
   /** Explicit WorkBuddy AI (international) desktop auth-file path, overriding env and platform defaults. */
   authFileAI?: string
+  /** Selected context capacity per WorkBuddy CN model. */
+  modelContextWindows?: Record<string, number>
+  /** Selected context capacity per WorkBuddy AI model. */
+  modelContextWindowsAI?: Record<string, number>
   /**
    * Whether the user has authorized sending probe requests about reasoning
    * efforts. Off by default: a probe spends real credit, so nothing is sent
@@ -219,11 +223,16 @@ const AUTH_FILE_AI_FIELD = z.string().description('WorkBuddy AI desktop auth fil
 /** Probe authorization (shared by the plugin schema and the CN section). */
 const PROBE_CONSENT_FIELD = z.boolean().default(false)
   .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)')
+/** Persist only token counts; the adapter also checks catalog support at use time. */
+const MODEL_CONTEXT_WINDOWS_FIELD = z.dict(z.number().min(1).max(Number.MAX_SAFE_INTEGER).step(1))
+  .description('Selected context capacity per model, in tokens')
 
 export const Config: z<Config> = z.object({
   authFile: AUTH_FILE_FIELD,
   authFileAI: AUTH_FILE_AI_FIELD,
   probeConsent: PROBE_CONSENT_FIELD,
+  modelContextWindows: MODEL_CONTEXT_WINDOWS_FIELD,
+  modelContextWindowsAI: MODEL_CONTEXT_WINDOWS_FIELD,
 })
 
 /**
@@ -238,11 +247,13 @@ export const Config: z<Config> = z.object({
 const CN_SECTION: z<Config> = z.object({
   authFile: AUTH_FILE_FIELD,
   probeConsent: PROBE_CONSENT_FIELD,
+  modelContextWindows: MODEL_CONTEXT_WINDOWS_FIELD,
 })
 
-/** The international card's settings section: only its own auth-file path. */
+/** The international card's settings section: only its own configuration. */
 const AI_SECTION: z<Config> = z.object({
   authFileAI: AUTH_FILE_AI_FIELD,
+  modelContextWindowsAI: MODEL_CONTEXT_WINDOWS_FIELD,
 })
 
 /** One variant's live runtime, assembled by {@link createVariantRuntime}. */
@@ -294,6 +305,8 @@ interface VariantRuntime {
   invalidate: () => void
   /** Whether the provider registered successfully. */
   registered: boolean
+  /** Resolve from live settings so adapter invalidation never captures stale config. */
+  contextWindowFor: (modelId: string) => number | undefined
 }
 
 /** One catalog request plus the identity state it is allowed to update. */
@@ -312,6 +325,11 @@ function credentialIdentity(credential: Pick<WorkBuddyCredential, 'uid' | 'enter
 /** Read the configured explicit auth-file path for one variant. */
 function configuredAuthFile(config: Config, variant: WorkBuddyVariant): string | undefined {
   return variant.id === CN_VARIANT.id ? config.authFile : config.authFileAI
+}
+
+/** Each variant owns a separate map even when upstream model ids overlap. */
+function contextWindowsFieldFor(variant: WorkBuddyVariant): 'modelContextWindows' | 'modelContextWindowsAI' {
+  return variant.id === CN_VARIANT.id ? 'modelContextWindows' : 'modelContextWindowsAI'
 }
 
 /** The settings namespace a variant's card and provider directory entry use. */
@@ -390,6 +408,7 @@ function createVariantRuntime(
     inflightFetch: undefined,
     invalidate: () => {},
     registered: false,
+    contextWindowFor: modelId => current()[contextWindowsFieldFor(variant)]?.[modelId],
   }
 }
 
@@ -487,6 +506,7 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
       catalog,
       resolveAttachments: () => ctx.get('attachments'),
       observe: modelId => probeService.recordFor(modelId),
+      contextWindowFor: runtime.contextWindowFor,
     })
     invalidate = workbuddy.invalidate
     runtime.invalidate = () => {
@@ -550,7 +570,7 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
 export function apply(ctx: Context, config: Config): void {
   // Live configuration source: starts as the applied config and is replaced by
   // the settings section's source once one is installed, so edits reach the
-  // probe consent gate without a restart.
+  // probe consent gate and model capacities without a restart.
   let current = (): Config => config
 
   /** Timers and in-flight work belonging to this plugin instance. */
@@ -651,12 +671,25 @@ export function apply(ctx: Context, config: Config): void {
         store: runtime.store,
         client: runtime.client,
         models: () => runtime.catalog.current(),
+        contextWindowFor: runtime.contextWindowFor,
         catalog: () => catalogSection(runtime),
         probe: () => probeSection(runtime, current().probeConsent === true),
         probeKey,
       })
       registerWorkBuddyProbeRoute(webCtx, {
         path: runtime.variant.probePath,
+        models: () => runtime.catalog.current(),
+        setContextWindow: async (modelId, contextWindow) => {
+          const settings = ctx.get('settings')
+          if (stopped || settings === undefined || !settings.writable) return false
+          // update() deep-merges and serializes namespace writes. Sending only
+          // this model avoids overwriting another card interaction's selection.
+          await settings.update(settingsNamespaceFor(runtime.variant), {
+            [contextWindowsFieldFor(runtime.variant)]: { [modelId]: contextWindow },
+          })
+          runtime.invalidate()
+          return true
+        },
         probe: async modelId => {
           // The authenticated manual endpoint is called only after per-model confirmation.
           const result = await runtime.probeService.probe(modelId, true)
@@ -722,12 +755,15 @@ export function apply(ctx: Context, config: Config): void {
     const merged = (): Config => ({
       ...sources.cn().authFile === undefined ? {} : { authFile: sources.cn().authFile },
       ...sources.cn().probeConsent === undefined ? {} : { probeConsent: sources.cn().probeConsent },
+      ...sources.cn().modelContextWindows === undefined ? {} : { modelContextWindows: sources.cn().modelContextWindows },
       ...sources.ai().authFileAI === undefined ? {} : { authFileAI: sources.ai().authFileAI },
+      ...sources.ai().modelContextWindowsAI === undefined ? {} : { modelContextWindowsAI: sources.ai().modelContextWindowsAI },
     })
     const repointStores = (): void => {
       const next = merged()
       for (const runtime of runtimes) {
         runtime.store.setDesktopPath(configuredAuthFile(next, runtime.variant))
+        runtime.invalidate()
       }
     }
     settingsCtx.settings.installSection(ctx, WORKBUDDY_SETTINGS_NS, CN_SECTION, config, {

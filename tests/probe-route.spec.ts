@@ -1,5 +1,5 @@
 import { createServer, request as httpRequest, type Server } from 'node:http'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createProbeKey, workBuddyProbeHandler, type WorkBuddyProbeRouteOptions } from '../src/probe-route.ts'
 
 /**
@@ -86,6 +86,64 @@ async function postRaw(
 }
 
 describe('probe control route', () => {
+  it('saves only a catalog-supported context window behind the existing key guard', async () => {
+    const setContextWindow = vi.fn(async () => true)
+    const { origin, key } = await mount({
+      models: () => [{ id: 'model', name: 'Model', contextWindow: 300_000, supportedContextWindows: [1_000_000, 300_000, 300_000], maxTokens: 1000, supportsImages: false }],
+      setContextWindow,
+    })
+    const action = { action: 'context-window', model: 'model', contextWindow: 1_000_000 }
+    expect((await post(origin, action)).status).toBe(403)
+    expect(setContextWindow).not.toHaveBeenCalled()
+    const result = await post(origin, action, { 'X-WorkBuddy-Probe-Key': key })
+    expect(result).toEqual({ status: 200, body: { state: 'updated', model: 'model', contextWindow: 1_000_000 } })
+    expect(setContextWindow).toHaveBeenCalledExactlyOnceWith('model', 1_000_000)
+  })
+
+  it('refuses unknown models, unsupported tiers, and malformed context values before writing', async () => {
+    const setContextWindow = vi.fn(async () => true)
+    const { origin, key } = await mount({
+      models: () => [{ id: 'model', name: 'Model', contextWindow: 300_000, supportedContextWindows: [300_000, 1_000_000], maxTokens: 1000, supportsImages: false }],
+      setContextWindow,
+    })
+    const headers = { 'X-WorkBuddy-Probe-Key': key }
+    expect((await post(origin, { action: 'context-window', model: 'missing', contextWindow: 1_000_000 }, headers)).body)
+      .toEqual({ error: 'unknown-model' })
+    expect((await post(origin, { action: 'context-window', model: 'model', contextWindow: 500_000 }, headers)).body)
+      .toEqual({ error: 'unsupported-context-window' })
+    for (const contextWindow of [undefined, null, '1000000', 0, -1, 300_000.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect((await post(origin, { action: 'context-window', model: 'model', contextWindow }, headers)).status).toBe(400)
+    }
+    expect((await post(origin, { action: 'context-window', contextWindow: 300_000 }, headers)).status).toBe(400)
+    expect(setContextWindow).not.toHaveBeenCalled()
+  })
+
+  it('uses only the default when a model has no supported list, even with a larger maxInputTokens', async () => {
+    const setContextWindow = vi.fn(async () => true)
+    const { origin, key } = await mount({
+      models: () => [{ id: 'model', name: 'Model', contextWindow: 300_000, maxInputTokens: 1_000_000, maxTokens: 1000, supportsImages: false }],
+      setContextWindow,
+    })
+    const headers = { 'X-WorkBuddy-Probe-Key': key }
+    expect((await post(origin, { action: 'context-window', model: 'model', contextWindow: 1_000_000 }, headers)).status).toBe(400)
+    expect((await post(origin, { action: 'context-window', model: 'model', contextWindow: 300_000 }, headers)).status).toBe(200)
+    expect(setContextWindow).toHaveBeenCalledExactlyOnceWith('model', 300_000)
+  })
+
+  it('reports unavailable settings and persistence failures without claiming a successful update', async () => {
+    const setContextWindow = vi.fn<NonNullable<WorkBuddyProbeRouteOptions['setContextWindow']>>()
+      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(new Error('storage unavailable'))
+    const { origin, key } = await mount({
+      models: () => [{ id: 'model', name: 'Model', contextWindow: 300_000, maxTokens: 1000, supportsImages: false }],
+      setContextWindow,
+    })
+    const action = { action: 'context-window', model: 'model', contextWindow: 300_000 }
+    const headers = { 'X-WorkBuddy-Probe-Key': key }
+    expect((await post(origin, action, headers)).status).toBe(503)
+    expect((await post(origin, action, headers)).status).toBe(500)
+  })
+
   it('accepts a probe carrying the correct key', async () => {
     const { origin, key, calls } = await mount()
     const result = await post(origin, { action: 'probe', model: 'auto' }, { 'X-WorkBuddy-Probe-Key': key })

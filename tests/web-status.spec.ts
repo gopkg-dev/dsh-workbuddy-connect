@@ -71,6 +71,43 @@ async function startStatusServer(overrides: Partial<WorkBuddyStatusRouteOptions>
 }
 
 describe('context capacity reporting', () => {
+  it('reports a supported selection and normalized choices while retaining the catalog default', async () => {
+    let selected = 1_000_000
+    const port = await startStatusServer({
+      models: () => [{
+        id: 'model', name: 'Model', contextWindow: 300_000, maxTokens: 64_000, supportsImages: true,
+        supportedContextWindows: [1_000_000, 0, 300_000, 300_000, 1.5],
+      }],
+      contextWindowFor: () => selected,
+    })
+    const read = async (): Promise<{ models: Record<string, unknown>[] }> => JSON.parse((await requestOnce({
+      port, method: 'GET', headers: { host: `127.0.0.1:${port}` },
+    })).body) as { models: Record<string, unknown>[] }
+    expect((await read()).models[0]).toMatchObject({
+      contextWindow: 1_000_000, defaultContextWindow: 300_000, supportedContextWindows: [300_000, 1_000_000],
+    })
+    selected = 500_000
+    expect((await read()).models[0]).toMatchObject({ contextWindow: 300_000, maxContextWindow: 1_000_000 })
+  })
+
+  it('does not infer choices from maxInputTokens when the supported list is missing or unusable', async () => {
+    const port = await startStatusServer({
+      models: () => [
+        { id: 'missing', name: 'Missing', contextWindow: 300_000, maxInputTokens: 1_000_000, maxTokens: 64_000, supportsImages: true },
+        { id: 'invalid', name: 'Invalid', contextWindow: 300_000, supportedContextWindows: [0, -1, 1.5], maxTokens: 64_000, supportsImages: true },
+      ],
+      contextWindowFor: () => 1_000_000,
+    })
+    const body = JSON.parse((await requestOnce({ port, method: 'GET', headers: { host: `127.0.0.1:${port}` } })).body) as {
+      models: Record<string, unknown>[]
+    }
+    for (const model of body.models) {
+      expect(model['contextWindow']).toBe(300_000)
+      expect(model['supportedContextWindows']).toBeUndefined()
+      expect(model['maxContextWindow']).toBeUndefined()
+    }
+  })
+
   /**
    * The card needs every model's capacity, not only the promoted ones: the
    * models where capacity matters (a 200k model beside 1M siblings) carry no
