@@ -112,6 +112,8 @@ Replace `web` with `dsh-tui` for the TUI profile. `status --json` produces machi
 
 ## Development and publishing
 
+Before publishing interactively, [enable two-factor authentication (2FA)](https://docs.npmjs.com/configuring-two-factor-authentication/#enabling-2fa) on your npm account, then run `npm login --registry=https://registry.npmjs.org`. Signing in without enabling 2FA can still result in an `E403` when publishing; complete any requested verification on npm's official website.
+
 ```sh
 pnpm install
 npm run check

@@ -119,6 +119,8 @@ dsh plugin --profile web exec dsh-workbuddy-connect doctor --provider workbuddy-
 
 ## 开发与发布
 
+交互式发布前，先在 npm 账号中[启用双重验证（2FA）](https://docs.npmjs.com/configuring-two-factor-authentication/#enabling-2fa)，再运行 `npm login --registry=https://registry.npmjs.org`。仅登录而未开启 2FA 的账号可能收到发布 `E403`；发布过程要求的验证请在 npm 官方页面完成。
+
 ```sh
 pnpm install
 npm run check
