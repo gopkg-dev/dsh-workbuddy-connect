@@ -7,7 +7,8 @@
  * @module dsh-workbuddy-connect/upstream
  */
 
-import { appUserAgent, resolveAppVersion, type AppVersionInfo } from './app-version.ts'
+import { gzipSync } from 'node:zlib'
+import { appUserAgent, resolveAppVersion, FALLBACK_APP_VERSION, type AppVersionInfo } from './app-version.ts'
 import type { WorkBuddyCredential } from './auth.ts'
 import type { ProbeAttempt } from './probe.ts'
 import { PROBE_MAX_TOKENS, PROBE_PROMPT } from './probe.ts'
@@ -129,6 +130,32 @@ const CN_BILLING_BASE = 'https://www.codebuddy.cn'
 const GLOBAL_BASE = 'https://www.workbuddy.ai'
 
 const CLIENT_UA = 'CLI/2.63.2 CodeBuddy/2.63.2'
+
+/**
+ * Desktop-App identity sent on chat requests.
+ *
+ * Captured from the real WorkBuddy desktop client's own packet. The gateway
+ * recognises a client by these headers — without them it does not classify the
+ * caller as the App and answers with a gateway-generated `crb-…` request id
+ * instead of echoing the caller's own. `X-IDE-Version` is filled from the
+ * installed App version at request time (see {@link resolveAppVersion}); the
+ * value below is only the last-resort default.
+ */
+const IDE_TYPE = 'WorkBuddy'
+const IDE_NAME = 'WorkBuddy'
+
+/**
+ * The App-shaped `User-Agent` the desktop client sends.
+ *
+ * Unlike the catalog UA (`WorkBuddyAI/<v>`, a gateway shape requirement), this
+ * mirrors the client's own composed form: product token twice, then the CLI
+ * token. `X-IDE-Version` carries the bare version.
+ */
+const APP_UA_CLI_TOKEN = 'CLI/2.137.1'
+function appChatUserAgent(version: string): string {
+  return `WorkBuddy/${version} WorkBuddy/${version} ${APP_UA_CLI_TOKEN}`
+}
+
 const JSON_TIMEOUT_MS = 30_000
 const ERROR_BODY_LIMIT = 4096
 
@@ -285,11 +312,69 @@ function commonHeaders(credential: WorkBuddyCredential): Record<string, string> 
   }
 }
 
+/** The App-identity headers the desktop client sends on chat requests. */
+function ideHeaders(appVersion: string): Record<string, string> {
+  return {
+    'X-IDE-Type': IDE_TYPE,
+    'X-IDE-Name': IDE_NAME,
+    'X-IDE-Version': appVersion,
+    'X-Private-Data': 'true',
+  }
+}
+
+/**
+ * Mint one request id in the shape the desktop client uses.
+ *
+ * The request table distinguishes the two kinds of id by form: a request the
+ * gateway accepts as the App is recorded under the caller's own **dashless**
+ * UUIDv4, while an unrecognised request is recorded under a server-generated
+ * `crb-…` UUIDv1. `crypto.randomUUID` already produces the v4 body; dropping the
+ * dashes matches the App's spelling (`b11c336ac5bb4f5db09c71c97c1371e1`, not
+ * `b11c336a-c5bb-4f5d-b09c-71c97c1371e1`), so the id is emitted in the form the
+ * client emits rather than the form `crypto` happens to return.
+ */
+function newConversationRequestId(): string {
+  return globalThis.crypto.randomUUID().replaceAll('-', '')
+}
+
+/** Body bytes for a chat POST, plus the headers describing their encoding. */
+interface EncodedBody {
+  body: Uint8Array
+  headers: Record<string, string>
+}
+
+/**
+ * Gzip a chat body the way the desktop client does.
+ *
+ * The client always sends `Content-Encoding: gzip` on chat POSTs — the captured
+ * packet carries the header with a 48 KB body — so the plugin gzips
+ * unconditionally rather than switching encoding by body size: an encoding that
+ * varies with payload size would not match the App's fixed shape. `Content-Length`
+ * is left to `fetch`, which derives it from the bytes it is handed.
+ */
+function encodeBody(json: string): EncodedBody {
+  return {
+    body: gzipSync(Buffer.from(json, 'utf8')),
+    headers: { 'Content-Encoding': 'gzip' },
+  }
+}
+
 /** Chat request headers, including the X-No-* conventions the official CLI uses. */
-function chatHeaders(credential: WorkBuddyCredential): Record<string, string> {
+function chatHeaders(
+  credential: WorkBuddyCredential,
+  options: { appVersion: string; conversationRequestId: string },
+): Record<string, string> {
   const headers: Record<string, string> = {
     ...commonHeaders(credential),
     'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    // The desktop client identifies itself here; the CLI shape is not
+    // recognised by the gateway, which is why the App headers are added.
+    'User-Agent': appChatUserAgent(options.appVersion),
+    ...ideHeaders(options.appVersion),
+    // The client mints a fresh id per request and the gateway echoes it back;
+    // without one the gateway substitutes its own `crb-…` id.
+    'X-Conversation-Request-ID': options.conversationRequestId,
     // 安全红线：chat 请求绝不携带 refresh token。
     ...credential.uid === '' ? { 'X-No-User-Id': '1' } : { 'X-User-Id': credential.uid },
     ...credential.enterpriseId === undefined || credential.enterpriseId === ''
@@ -489,18 +574,45 @@ export class WorkBuddyUpstreamClient {
     this.resolveAppVersion = options.resolveAppVersion ?? (() => resolveAppVersion())
   }
 
+  /**
+   * The App version used for the identity headers, resolved once per instance.
+   *
+   * The headers now carry the App version on every chat request, and resolving
+   * it reads the installed App's plist; caching keeps that off the hot path
+   * while still picking up a real version when one is available. A resolver
+   * failure degrades to the compiled-in default rather than failing the chat.
+   */
+  private appVersionForHeaders: Promise<string> | undefined
+
+  private headersAppVersion(): Promise<string> {
+    this.appVersionForHeaders ??= this.resolveAppVersion()
+      .then(info => info.version)
+      .catch(() => FALLBACK_APP_VERSION)
+    return this.appVersionForHeaders
+  }
+
   /** POST the chat endpoint; a successful answer is the raw SSE response. */
   async chatStream(
     credential: WorkBuddyCredential,
     bodyJson: string,
     signal?: AbortSignal,
   ): Promise<WorkBuddyChatResult> {
+    const appVersion = await this.headersAppVersion()
+    const body = regionOf(credential.domain) === 'global' ? prepareInternationalChatBody(bodyJson) : bodyJson
+    const encoded = encodeBody(body)
     let response: Response
     try {
       response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
         method: 'POST',
-        headers: { ...chatHeaders(credential), 'Authorization': `Bearer ${credential.accessToken}` },
-        body: regionOf(credential.domain) === 'global' ? prepareInternationalChatBody(bodyJson) : bodyJson,
+        headers: {
+          ...chatHeaders(credential, {
+            appVersion,
+            conversationRequestId: newConversationRequestId(),
+          }),
+          'Authorization': `Bearer ${credential.accessToken}`,
+          ...encoded.headers,
+        },
+        body: encoded.body,
         ...signal === undefined ? {} : { signal },
       })
     } catch (error: unknown) {
@@ -697,12 +809,21 @@ export class WorkBuddyUpstreamClient {
     }
     if (effort !== undefined) payload['reasoning_effort'] = effort
 
+    const appVersion = await this.headersAppVersion()
+    const encoded = encodeBody(JSON.stringify(payload))
     let response: Response
     try {
       response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
         method: 'POST',
-        headers: { ...chatHeaders(credential), 'Authorization': `Bearer ${credential.accessToken}` },
-        body: JSON.stringify(payload),
+        headers: {
+          ...chatHeaders(credential, {
+            appVersion,
+            conversationRequestId: newConversationRequestId(),
+          }),
+          'Authorization': `Bearer ${credential.accessToken}`,
+          ...encoded.headers,
+        },
+        body: encoded.body,
         signal,
       })
     } catch (error: unknown) {

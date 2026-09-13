@@ -296,6 +296,16 @@ declare class WorkBuddyUpstreamClient {
   /** Provenance of the most recent successful catalog fetch, for the card. */
   lastCatalog: WorkBuddyCatalogFetch | undefined;
   constructor(options?: WorkBuddyUpstreamClientOptions);
+  /**
+   * The App version used for the identity headers, resolved once per instance.
+   *
+   * The headers now carry the App version on every chat request, and resolving
+   * it reads the installed App's plist; caching keeps that off the hot path
+   * while still picking up a real version when one is available. A resolver
+   * failure degrades to the compiled-in default rather than failing the chat.
+   */
+  private appVersionForHeaders;
+  private headersAppVersion;
   /** POST the chat endpoint; a successful answer is the raw SSE response. */
   chatStream(credential: WorkBuddyCredential, bodyJson: string, signal?: AbortSignal): Promise<WorkBuddyChatResult>;
   /** POST the token-refresh endpoint; the caller merges the outcome. */
