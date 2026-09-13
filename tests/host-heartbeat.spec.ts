@@ -54,14 +54,14 @@ describe('host heartbeat', () => {
     expect(await readHostHeartbeat()).toBeUndefined()
   })
 
-  it('continues to read a heartbeat left by the upstream package', async () => {
+  it.each(['dsh-workbuddy-connect', 'dsh-workbuddy-connect-gopkg'])('continues to read a heartbeat left by %s', async packageName => {
     root = await mkdtemp(join(tmpdir(), 'wb-heartbeat-upstream-'))
     vi.stubEnv('DSH_HOME', root)
     const { writeFile } = await import('node:fs/promises')
     await writeFile(workbuddyHostHeartbeatPath(), JSON.stringify({
-      version: 1, package: 'dsh-workbuddy-connect', pluginVersion: '0.5.0', registeredAt: Date.now(), pid: process.pid,
+      version: 1, package: packageName, pluginVersion: '0.5.0', registeredAt: Date.now(), pid: process.pid,
     }), 'utf8')
-    expect(await readHostHeartbeat()).toMatchObject({ package: 'dsh-workbuddy-connect', pluginVersion: '0.5.0' })
+    expect(await readHostHeartbeat()).toMatchObject({ package: packageName, pluginVersion: '0.5.0' })
   })
 
   it('detects a recycled PID as dead (registeredAt after this process started)', async () => {

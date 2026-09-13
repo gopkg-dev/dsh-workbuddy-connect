@@ -80,7 +80,7 @@ export async function readHostHeartbeat(): Promise<WorkBuddyHostHeartbeat | unde
     const parsed = JSON.parse(raw) as Partial<WorkBuddyHostHeartbeat>
     if (
       parsed.version === HEARTBEAT_FORMAT_VERSION
-      && (parsed.package === WORKBUDDY_CONNECT_PACKAGE || parsed.package === 'dsh-workbuddy-connect')
+      && (parsed.package === WORKBUDDY_CONNECT_PACKAGE || parsed.package === 'dsh-workbuddy-connect' || parsed.package === 'dsh-workbuddy-connect-gopkg')
       && typeof parsed.registeredAt === 'number'
       && typeof parsed.pid === 'number'
     ) {

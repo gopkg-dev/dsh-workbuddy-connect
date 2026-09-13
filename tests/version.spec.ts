@@ -14,7 +14,9 @@ describe('package version sync', () => {
   it('uses the published package name for diagnostics, the plugin patch, and the browser loader', () => {
     const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string }
     expect(WORKBUDDY_CONNECT_PACKAGE).toBe(pkg.name)
-    expect(readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')).toContain(`name: ${pkg.name}\n`)
+    const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+    const patchName = patch.match(/^\s+name: ['"]?([^'"\n]+)['"]?\s*$/m)?.[1]
+    expect(patchName).toBe(pkg.name)
     const client = new URL('../lib/client.js', import.meta.url)
     if (existsSync(client)) {
       let loaded: { id: string; factory: unknown } | undefined

@@ -4,7 +4,7 @@
 
 将 WorkBuddy / WorkBuddy AI 桌面 App 中的模型接入 DeepSeek Harness，在 DSH 中复用已登录账号进行对话。
 
-本仓库是 **[gopkg-dev 维护的 fork](https://github.com/gopkg-dev/dsh-workbuddy-connect)**，基于 [corrinehu/dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect) 的 `v0.5.0`（[`1830e03`](https://github.com/corrinehu/dsh-workbuddy-connect/commit/1830e03)）。npm 包名为 **`dsh-workbuddy-connect-gopkg`**，本 fork 从 **`0.6.0`** 开始独立发布。感谢原作者 Corrine Hu；保留原项目的 MIT 许可证与版权声明。
+本仓库是 **[gopkg-dev 维护的 fork](https://github.com/gopkg-dev/dsh-workbuddy-connect)**，基于 [corrinehu/dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect) 的 `v0.5.0`（[`1830e03`](https://github.com/corrinehu/dsh-workbuddy-connect/commit/1830e03)）。npm 包名为 **`@gopkg-dev/dsh-workbuddy-connect`**，本 fork 从 **`0.6.0`** 开始独立发布。感谢原作者 Corrine Hu；保留原项目的 MIT 许可证与版权声明。
 
 ## 本 fork 增加了什么
 
@@ -65,7 +65,7 @@ WorkBuddy 中模型的推理档位信息目前分散在上游接口与客户端�
 
 本 fork 沿用上游 `0.5.0` 的依赖要求：DSH 核心 `0.1.5-rc.1` 及以上，对应上游说明中的 Desktop `2.0.7`+；TUI 插件 `@deepseek-harness-tui/dsh-tui` 需 `0.10.0-beta.5` 及以上。旧 DSH 用户请参考[上游安装说明](https://github.com/corrinehu/dsh-workbuddy-connect#安装)选择上游旧版；本 npm 包没有上游 `0.3.1` 等历史版本。
 
-**同一 profile 不要同时启用原版与本 fork**：两者共用 provider 和设置标识。从原版迁移时，先移除原包，再安装本 fork。
+**同一 profile 只启用一个版本**：原版 `dsh-workbuddy-connect`、本 fork 的旧包 `dsh-workbuddy-connect-gopkg` 与现用包 `@gopkg-dev/dsh-workbuddy-connect` 共用 provider、设置标识和 CLI 可执行文件名。从原版或旧包迁移时，先移除已安装的包，再安装现用包。
 
 ### Web
 
@@ -73,8 +73,11 @@ WorkBuddy 中模型的推理档位信息目前分散在上游接口与客户端�
 # 仅从原版迁移时执行
 dsh plugin --profile web remove dsh-workbuddy-connect
 
+# 仅从本 fork 的旧包迁移时执行
+dsh plugin --profile web remove dsh-workbuddy-connect-gopkg
+
 # 安装本 fork（npm 包包含预构建产物）
-dsh plugin --profile web add dsh-workbuddy-connect-gopkg
+dsh plugin --profile web add @gopkg-dev/dsh-workbuddy-connect
 dsh web
 ```
 
@@ -86,7 +89,7 @@ dsh plugin --profile web add github:gopkg-dev/dsh-workbuddy-connect
 
 ### Desktop
 
-在 DSH Desktop 内置插件市场中安装 **`dsh-workbuddy-connect-gopkg`**；已安装原版的用户先移除原版。Desktop profile 由桌面应用管理，DSH CLI 不接受 `--profile desktop` 的插件管理命令。
+在 DSH Desktop 内置插件市场中输入并安装 **`@gopkg-dev/dsh-workbuddy-connect`**；已安装原版或本 fork 旧包的用户先移除对应包。Desktop profile 由桌面应用管理，DSH CLI 不接受 `--profile desktop` 的插件管理命令。
 
 ### TUI
 
@@ -94,17 +97,17 @@ dsh plugin --profile web add github:gopkg-dev/dsh-workbuddy-connect
 # 仅从原版迁移时执行
 dsh plugin --profile dsh-tui remove dsh-workbuddy-connect
 
-dsh plugin --profile dsh-tui add dsh-workbuddy-connect-gopkg
+dsh plugin --profile dsh-tui add @gopkg-dev/dsh-workbuddy-connect
 dsh --profile dsh-tui
 ```
 
-上游 TUI 安装说明要求 pnpm 11；若出现 `ERR_PNPM_UNEXPECTED_STORE`，请检查实际使用的 pnpm 版本。
+从本 fork 的旧包迁移时，将移除命令中的包名替换为 `dsh-workbuddy-connect-gopkg`。上游 TUI 安装说明要求 pnpm 11；若出现 `ERR_PNPM_UNEXPECTED_STORE`，请检查实际使用的 pnpm 版本。
 
 安装后，在模型选择器中切换到 WorkBuddy / WorkBuddy AI。Web / Desktop 插件设置提供上下文选择和推理档位检测；TUI 不提供这两个交互入口，可在 `/settings` 配置 `authFile`（国际版为 `authFileAI`）。
 
 ## 命令行
 
-安装和移除使用新 **npm 包名** `dsh-workbuddy-connect-gopkg`；包内 **可执行文件名**仍为 `dsh-workbuddy-connect`，因此 `exec` 后保留旧名称：
+安装和移除使用新 **npm 包名** `@gopkg-dev/dsh-workbuddy-connect`；包内 **可执行文件名**仍为 `dsh-workbuddy-connect`，因此 `exec` 后保留该名称：
 
 ```sh
 # 国内版状态

@@ -1,5 +1,5 @@
 {
-  "name": "dsh-workbuddy-connect-gopkg",
+  "name": "@gopkg-dev/dsh-workbuddy-connect",
   "displayName": "DSH WorkBuddy Connect (gopkg)",
   "description": "gopkg fork：接入 WorkBuddy / WorkBuddy AI 模型，支持按模型选择上下文窗口与桌面客户端请求格式。WorkBuddy models for DSH with selectable context windows.",
   "version": "0.6.0",

@@ -4,7 +4,7 @@ English | [中文](./README.md)
 
 Use models from the WorkBuddy / WorkBuddy AI desktop apps in DeepSeek Harness with your existing signed-in accounts.
 
-This is the **[fork maintained by gopkg-dev](https://github.com/gopkg-dev/dsh-workbuddy-connect)**, based on [corrinehu/dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect) `v0.5.0` ([`1830e03`](https://github.com/corrinehu/dsh-workbuddy-connect/commit/1830e03)). Its npm package is **`dsh-workbuddy-connect-gopkg`**, with independent releases starting at **`0.6.0`**. Thanks to original author Corrine Hu; the original MIT license and copyright notice are retained.
+This is the **[fork maintained by gopkg-dev](https://github.com/gopkg-dev/dsh-workbuddy-connect)**, based on [corrinehu/dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect) `v0.5.0` ([`1830e03`](https://github.com/corrinehu/dsh-workbuddy-connect/commit/1830e03)). Its npm package is **`@gopkg-dev/dsh-workbuddy-connect`**, with independent releases starting at **`0.6.0`**. Thanks to original author Corrine Hu; the original MIT license and copyright notice are retained.
 
 ## What this fork adds
 
@@ -58,7 +58,7 @@ Prerequisites: install and sign in to the WorkBuddy or WorkBuddy AI desktop app.
 
 This fork retains upstream `0.5.0`'s requirements: DSH core `0.1.5-rc.1` or newer, corresponding to Desktop `2.0.7`+ in the upstream instructions. The TUI package `@deepseek-harness-tui/dsh-tui` must be `0.10.0-beta.5` or newer. For older DSH versions, consult the [upstream installation instructions](https://github.com/corrinehu/dsh-workbuddy-connect/blob/main/README.en.md#install) and use an upstream release; this npm package does not provide historical upstream versions such as `0.3.1`.
 
-**Do not enable the original plugin and this fork in the same profile**: they share provider and settings identifiers. Remove the original package before installing this fork.
+**Enable only one version in each profile**: the original `dsh-workbuddy-connect`, this fork's former package `dsh-workbuddy-connect-gopkg`, and the current `@gopkg-dev/dsh-workbuddy-connect` share provider identifiers, settings identifiers, and the CLI executable name. Remove the installed original or former package before installing the current package.
 
 ### Web
 
@@ -66,8 +66,11 @@ This fork retains upstream `0.5.0`'s requirements: DSH core `0.1.5-rc.1` or newe
 # Only when migrating from the original plugin
 dsh plugin --profile web remove dsh-workbuddy-connect
 
+# Only when migrating from this fork's former package
+dsh plugin --profile web remove dsh-workbuddy-connect-gopkg
+
 # Install this fork (the npm package includes built artifacts)
-dsh plugin --profile web add dsh-workbuddy-connect-gopkg
+dsh plugin --profile web add @gopkg-dev/dsh-workbuddy-connect
 dsh web
 ```
 
@@ -79,7 +82,7 @@ dsh plugin --profile web add github:gopkg-dev/dsh-workbuddy-connect
 
 ### Desktop
 
-Install **`dsh-workbuddy-connect-gopkg`** from DSH Desktop's built-in plugin market; remove the original plugin first if installed. The desktop app manages its own profile, and the DSH CLI rejects plugin management with `--profile desktop`.
+Enter and install **`@gopkg-dev/dsh-workbuddy-connect`** in DSH Desktop's built-in plugin market; remove the original plugin or this fork's former package first if installed. The desktop app manages its own profile, and the DSH CLI rejects plugin management with `--profile desktop`.
 
 ### TUI
 
@@ -87,17 +90,17 @@ Install **`dsh-workbuddy-connect-gopkg`** from DSH Desktop's built-in plugin mar
 # Only when migrating from the original plugin
 dsh plugin --profile dsh-tui remove dsh-workbuddy-connect
 
-dsh plugin --profile dsh-tui add dsh-workbuddy-connect-gopkg
+dsh plugin --profile dsh-tui add @gopkg-dev/dsh-workbuddy-connect
 dsh --profile dsh-tui
 ```
 
-Upstream TUI installation instructions require pnpm 11; check the active pnpm version if installation reports `ERR_PNPM_UNEXPECTED_STORE`.
+When migrating from this fork's former package, use `dsh-workbuddy-connect-gopkg` in the removal command. Upstream TUI installation instructions require pnpm 11; check the active pnpm version if installation reports `ERR_PNPM_UNEXPECTED_STORE`.
 
 After installation, select WorkBuddy / WorkBuddy AI in the model picker. Web / Desktop plugin settings provide context selection and reasoning-level probes. TUI does not expose those two interactive controls; configure `authFile` in `/settings` (`authFileAI` for the international app).
 
 ## CLI
 
-Installation and removal use the new **npm package name**, `dsh-workbuddy-connect-gopkg`. The bundled **executable** remains `dsh-workbuddy-connect`, so keep that name after `exec`:
+Installation and removal use the new **npm package name**, `@gopkg-dev/dsh-workbuddy-connect`. The bundled **executable** remains `dsh-workbuddy-connect`, so keep that name after `exec`:
 
 ```sh
 # CN account status
