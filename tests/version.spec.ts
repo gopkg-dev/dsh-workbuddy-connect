@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
-import { WORKBUDDY_CONNECT_VERSION } from '../src/version.ts'
+import { WORKBUDDY_CONNECT_PACKAGE, WORKBUDDY_CONNECT_VERSION } from '../src/version.ts'
 
 /**
  * Guard the single-source-of-truth version contract:
@@ -10,6 +11,21 @@ import { WORKBUDDY_CONNECT_VERSION } from '../src/version.ts'
  *   in heartbeat / CLI output).
  */
 describe('package version sync', () => {
+  it('uses the published package name for diagnostics, the plugin patch, and the browser loader', () => {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string }
+    expect(WORKBUDDY_CONNECT_PACKAGE).toBe(pkg.name)
+    expect(readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')).toContain(`name: ${pkg.name}\n`)
+    const client = new URL('../lib/client.js', import.meta.url)
+    if (existsSync(client)) {
+      let loaded: { id: string; factory: unknown } | undefined
+      runInNewContext(readFileSync(client, 'utf8'), {
+        window: { __ModuleLoader__: { load(definition: { id: string; factory: unknown }) { loaded = definition } } },
+      })
+      expect(loaded?.id).toBe(pkg.name)
+      expect(typeof loaded?.factory).toBe('function')
+    }
+  })
+
   it('WORKBUDDY_CONNECT_VERSION matches package.json', () => {
     const pkg = JSON.parse(
       readFileSync(new URL('../package.json', import.meta.url), 'utf8'),

@@ -1,9 +1,15 @@
 {
-  "name": "dsh-workbuddy-connect",
-  "displayName": "DSH WorkBuddy Connect",
-  "description": "将 WorkBuddy 桌面 App 包含的模型自动接入 DeepSeek Harness — bring WorkBuddy desktop app models into DeepSeek Harness with zero configuration.",
-  "version": "0.5.0",
+  "name": "dsh-workbuddy-connect-gopkg",
+  "displayName": "DSH WorkBuddy Connect (gopkg)",
+  "description": "gopkg fork：接入 WorkBuddy / WorkBuddy AI 模型，支持按模型选择上下文窗口与桌面客户端请求格式。WorkBuddy models for DSH with selectable context windows.",
+  "version": "0.6.0",
   "author": "corrinehu",
+  "contributors": [
+    {
+      "name": "gopkg-dev",
+      "url": "https://github.com/gopkg-dev"
+    }
+  ],
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
@@ -22,6 +28,7 @@
   },
   "scripts": {
     "prepack": "npm run build",
+    "prepublishOnly": "npm run check",
     "build": "tsdown",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
@@ -38,18 +45,24 @@
   },
   "files": [
     "lib",
+    "assets",
     "cordis.patch.yml",
     "README.md",
     "README.en.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/corrinehu/dsh-workbuddy-connect.git"
+    "url": "git+https://github.com/gopkg-dev/dsh-workbuddy-connect.git"
   },
-  "homepage": "https://github.com/corrinehu/dsh-workbuddy-connect#readme",
-  "bugs": "https://github.com/corrinehu/dsh-workbuddy-connect/issues",
+  "homepage": "https://github.com/gopkg-dev/dsh-workbuddy-connect#readme",
+  "bugs": "https://github.com/gopkg-dev/dsh-workbuddy-connect/issues",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

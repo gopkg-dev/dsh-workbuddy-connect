@@ -959,7 +959,7 @@ declare const HEARTBEAT_FORMAT_VERSION = 1;
 /** On-disk shape of the heartbeat. */
 interface WorkBuddyHostHeartbeat {
   version: typeof HEARTBEAT_FORMAT_VERSION;
-  package: 'dsh-workbuddy-connect';
+  package: string;
   pluginVersion: string;
   /** Epoch milliseconds when the host registered the provider. */
   registeredAt: number;

@@ -1,12 +1,24 @@
-# DSH WorkBuddy Connect
+# DSH WorkBuddy Connect · gopkg-dev fork
 
 English | [中文](./README.md)
 
-Brings every model in the WorkBuddy desktop app (GLM-5.3, GLM-5.2, DeepSeek-V4-Pro, DeepSeek-V4-Flash, Kimi-K3, MiniMax-M3, Hy3, and more) straight into [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) — zero configuration in the DSH chat.
+Use models from the WorkBuddy / WorkBuddy AI desktop apps in DeepSeek Harness with your existing signed-in accounts.
 
-Both the CN **WorkBuddy** and the international **WorkBuddy AI** apps are supported (international support since **v0.5.0**): whichever one you have installed shows up as its own model group, and having both installed shows both, each with its own account and credit.
+This is the **[fork maintained by gopkg-dev](https://github.com/gopkg-dev/dsh-workbuddy-connect)**, based on [corrinehu/dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect) `v0.5.0` ([`1830e03`](https://github.com/corrinehu/dsh-workbuddy-connect/commit/1830e03)). Its npm package is **`dsh-workbuddy-connect-gopkg`**, with independent releases starting at **`0.6.0`**. Thanks to original author Corrine Hu; the original MIT license and copyright notice are retained.
 
-## Features
+## What this fork adds
+
+- **Per-model context windows**: open Settings → Plugins → WorkBuddy / WorkBuddy AI → Context, and select a window from the catalog's `supportedContextWindows`, such as **300K / 1M**. Without a selection, `contextWindow` applies; models without selectable windows keep that default.
+
+- **Persistent context preferences**: choices save automatically, are stored separately for CN and international providers, and survive restarts. The adapter uses the chosen window for subsequent model calls. Invalid saved values, or values no longer supported after a catalog refresh, fall back to the model's current `contextWindow`. For `[300000, 1000000]`, select 1M without editing the catalog cache.
+
+- **Chat and reasoning-probe request formatting**: `src/upstream.ts` sends an app-format `User-Agent` and `X-IDE-Type`, `X-IDE-Name`, `X-IDE-Version`, and `X-Private-Data` headers. The existing resolver supplies the app version, cached per client instance, with a built-in fallback if resolution fails. Every request receives a fresh UUIDv4 without hyphens as its `X-Conversation-Request-ID`; JSON bodies are compressed with gzip and sent with `Content-Encoding: gzip`.
+
+Context choices follow the catalog declaration; the service still decides whether to accept an actual request. Request formatting changes do not guarantee changes to server-side client recognition, pricing, quotas, or restrictions. See the [CHANGELOG](./CHANGELOG.md).
+
+## Features inherited from upstream
+
+Both CN **WorkBuddy** and international **WorkBuddy AI** are supported: installing and signing in to both provides two model groups, each with its own account and credit. The screenshots below were supplied by upstream and do not show this fork's new context selection controls.
 
 - **Works out of the box**: install and enable the plugin, then use it directly in DSH — no extra configuration.
 
@@ -28,8 +40,6 @@ Both the CN **WorkBuddy** and the international **WorkBuddy AI** apps are suppor
 
 ![Settings card showing the plugin](assets/2.png)
 
-The expanded card has three tabs: **Status** shows the account, token validity, total credit, catalog source, and reasoning-level detection; **Context** lists each model's context window (the international version distinguishes the default window from a larger selectable one); **Details** shows per-package credit and model offers. The CN and international versions each get their own card, showing their own account's information.
-
 ![Settings card showing account and remaining credit](assets/3.png)
 
 ## Why reasoning levels work this way
@@ -42,73 +52,84 @@ Testing also found that some models accept the `reasoning_effort` parameter whil
 
 For models without declared levels, Web and Desktop instead use user-authorized, on-demand detection: it first confirms that the upstream validates the parameter, then checks which standard levels it accepts. The check sends a few requests and may consume credit. Its result means only that the upstream currently accepts that level; it does not promise a particular change in reasoning quality, speed, or credit use.
 
-## Install
+## Install and migrate
 
-Prerequisite: the WorkBuddy desktop app is installed and signed in. The plugin reuses the app's sign-in state and follows account switches automatically; the same applies to the international WorkBuddy AI app, and the two do not affect each other.
+Prerequisites: install and sign in to the WorkBuddy or WorkBuddy AI desktop app. The plugin reuses its sign-in state. Node.js must satisfy `^22.19.0 || >=24.0.0`.
 
-**Match the plugin version to your DSH core** — a mismatched combination fails to start DSH:
+This fork retains upstream `0.5.0`'s requirements: DSH core `0.1.5-rc.1` or newer, corresponding to Desktop `2.0.7`+ in the upstream instructions. The TUI package `@deepseek-harness-tui/dsh-tui` must be `0.10.0-beta.5` or newer. For older DSH versions, consult the [upstream installation instructions](https://github.com/corrinehu/dsh-workbuddy-connect/blob/main/README.en.md#install) and use an upstream release; this npm package does not provide historical upstream versions such as `0.3.1`.
 
-| Plugin | Required DSH core | Desktop app |
-|---|---|---|
-| **0.3.2+** (international support since `0.5.0`) | `0.1.5-rc.1` or newer | `2.0.7`+ (bundled core `0.1.5-rc.1`) |
-| **0.3.0 – 0.3.1** | `0.1.2-rc.1` | `2.0.5` |
-| **0.2.6** | `0.1.1-rc.2` (older line) | `2.0.3` / `2.0.4` |
+**Do not enable the original plugin and this fork in the same profile**: they share provider and settings identifiers. Remove the original package before installing this fork.
 
-- On DSH `0.1.5-rc.1` or newer, just install the latest: `dsh plugin --profile web add dsh-workbuddy-connect`
-- Still on DSH `0.1.2-rc.1`? Stay on `0.3.1`: `dsh plugin --profile web add dsh-workbuddy-connect@0.3.1`
-- Still on DSH `0.1.1-rc.2`? Stay on the older release: `dsh plugin --profile web add dsh-workbuddy-connect@0.2.6`
-- The desktop app has bundled `0.1.5-rc.1` since `2.0.7`, so it can use `0.3.2` and newer directly; `2.0.5` and earlier apps (bundled `0.1.2-rc.1`) should stay on `0.3.1`
-
-The plugin runs under all three DSH interfaces: **Web**, **Desktop**, and **TUI**. Pick the install command that matches the profile you use.
+### Web
 
 ```sh
-# Web (recommended; ships prebuilt artifacts)
-dsh plugin --profile web add dsh-workbuddy-connect
-dsh web
+# Only when migrating from the original plugin
+dsh plugin --profile web remove dsh-workbuddy-connect
 
-# or install the Web version from the GitHub source
-dsh plugin --profile web add github:corrinehu/dsh-workbuddy-connect
+# Install this fork (the npm package includes built artifacts)
+dsh plugin --profile web add dsh-workbuddy-connect-gopkg
 dsh web
 ```
 
-```sh
-# Desktop (the DSH Desktop app)
-dsh plugin --profile desktop add dsh-workbuddy-connect
-dsh --profile desktop
-```
+Alternatively, install from this fork's GitHub source:
 
 ```sh
-# TUI (terminal UI)
-dsh plugin --profile dsh-tui add dsh-workbuddy-connect
+dsh plugin --profile web add github:gopkg-dev/dsh-workbuddy-connect
+```
+
+### Desktop
+
+Install **`dsh-workbuddy-connect-gopkg`** from DSH Desktop's built-in plugin market; remove the original plugin first if installed. The desktop app manages its own profile, and the DSH CLI rejects plugin management with `--profile desktop`.
+
+### TUI
+
+```sh
+# Only when migrating from the original plugin
+dsh plugin --profile dsh-tui remove dsh-workbuddy-connect
+
+dsh plugin --profile dsh-tui add dsh-workbuddy-connect-gopkg
 dsh --profile dsh-tui
 ```
 
-> **TUI users, check the version pairing**: the terminal UI package (`@deepseek-harness-tui/dsh-tui`) must be **`0.10.0-beta.5` or newer** — older versions fail at startup with `events is not iterable` when this plugin is installed. Update the shell first (via its built-in update command or a fresh install), then add this plugin; the newest release is a beta, and a stable one will work the same way.
+Upstream TUI installation instructions require pnpm 11; check the active pnpm version if installation reports `ERR_PNPM_UNEXPECTED_STORE`.
 
-> Manual reasoning-level detection is currently available only on Web and Desktop; TUI does not provide a detection action.
-
-> Note: the `dsh-tui` profile requires pnpm 11 to install packages (a different pnpm on PATH fails with `ERR_PNPM_UNEXPECTED_STORE` — use `npx pnpm@11`).
-
-After installing, switch to a WorkBuddy model in the model picker of the interface you chose. On Web and Desktop, the settings card shows the account, token validity, and remaining credit, can refresh the model list manually, and can check eligible models for reasoning levels; the CN and international versions each have their own card. On TUI, configure `authFile` in `/settings` (or `authFileAI` for the international version).
+After installation, select WorkBuddy / WorkBuddy AI in the model picker. Web / Desktop plugin settings provide context selection and reasoning-level probes. TUI does not expose those two interactive controls; configure `authFile` in `/settings` (`authFileAI` for the international app).
 
 ## CLI
 
-`dsh plugin --profile <web|desktop|dsh-tui> exec dsh-workbuddy-connect status`: sign-in state and remaining credit (`--json` for machine-readable output; `doctor` for diagnostics and `logout` for credential cleanup are also available).
-
-Both commands target the CN version by default; add `--provider workbuddy-ai` for the international one:
+Installation and removal use the new **npm package name**, `dsh-workbuddy-connect-gopkg`. The bundled **executable** remains `dsh-workbuddy-connect`, so keep that name after `exec`:
 
 ```sh
+# CN account status
+dsh plugin --profile web exec dsh-workbuddy-connect status
+
+# International account status and diagnostics
 dsh plugin --profile web exec dsh-workbuddy-connect status --provider workbuddy-ai
 dsh plugin --profile web exec dsh-workbuddy-connect doctor --provider workbuddy-ai
 ```
 
-`logout` removes only that version's plugin-owned credential copy. It leaves the desktop app's own sign-in alone and does not promise the model group will disappear (the app's credential file still supplies one).
+Replace `web` with `dsh-tui` for the TUI profile. `status --json` produces machine-readable output. `logout` removes only the selected version's plugin-owned credential copy; it does not sign out of the desktop app or guarantee that its model group disappears.
+
+## Development and publishing
+
+```sh
+pnpm install
+npm run check
+npm pack --dry-run
+
+# When signed in to npm with permission to publish this package
+npm publish --access public
+```
+
+`npm run check` runs type checks, tests, and the build; packing also triggers a build. Review the package name, version, and file list before publishing, then verify installation with the commands above. See the [npm publish documentation](https://docs.npmjs.com/cli/commands/npm-publish) for registry authentication and publication requirements.
+
+Fork validation covers context defaults, persistence and restoration, CN/international separation, invalid-window fallback, request headers, and gzip encoding. Context settings also received isolated UI verification. This does not constitute fresh live-service testing of every platform, model, or inherited upstream feature.
 
 ## Known limitations
 
-- Verified on macOS with the DSH Web / Desktop / TUI profiles (as of 0.3.2 this requires `0.1.5-rc.1`+ and Node 22+; TUI requires the terminal UI package `0.10.0-beta.5` or newer — see the Install section). Windows probes Local and Roaming AppData in order; WSL first reads credentials from the mounted Windows user profile. If the Windows and Linux user names differ and Windows environment variables are not forwarded into WSL, point `WORKBUDDY_AUTH_FILE` (or `WORKBUDDY_AI_AUTH_FILE` for the international version) at the actual file.
+- Upstream reports verification on macOS with the DSH Web / Desktop / TUI profiles (as of upstream 0.3.2 this requires `0.1.5-rc.1`+ and Node 22+; TUI requires the terminal UI package `0.10.0-beta.5` or newer — see the Install section). Windows probes Local and Roaming AppData in order; WSL first reads credentials from the mounted Windows user profile. If the Windows and Linux user names differ and Windows environment variables are not forwarded into WSL, point `WORKBUDDY_AUTH_FILE` (or `WORKBUDDY_AI_AUTH_FILE` for the international version) at the actual file.
 - **The international version's model catalog comes from the app's own interface**: the service splits it by User-Agent, which is a private implementation detail that a server-side change can break. When that happens the plugin degrades to this account's last successful catalog and then to its built-in roster, showing the source (live / saved / built-in), the fetch time, and the failure reason on the card — but long-term compatibility is not guaranteed. The CN version's catalog uses the same interface as the official CLI and is unaffected.
-- **International-version environments not yet covered**: on Windows / WSL / Linux no reliable source for the international app's version has been located yet, so the saved value or the built-in default is used. On macOS, real-shim checks covered complete GPT-family replies, tool calls, and continued turns.
+- **International-version environments not yet covered**: on Windows / WSL / Linux no reliable source for the international app's version has been located yet, so the saved value or the built-in default is used. Upstream reports that macOS real-shim checks covered complete GPT-family replies, tool calls, and continued turns.
 - **Behaviour change with no credentials**: a version whose app was never signed in — and that left no plugin-owned copy — no longer shows a model group. The CN version used to display a built-in fallback list, but every model on it failed when selected.
 - Relies on WorkBuddy client interfaces (not a public API); the plugin may need updates as WorkBuddy changes.
 
@@ -121,9 +142,10 @@ dsh plugin --profile web exec dsh-workbuddy-connect doctor --provider workbuddy-
 
 ## Acknowledgements
 
+- [corrinehu/dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect) (MIT) — the upstream project, by original author Corrine Hu.
 - [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) (MIT) — reference implementation of the WorkBuddy upstream protocol.
 - [franksong2702/dsh-codex-connect](https://github.com/franksong2702/dsh-codex-connect) (Apache-2.0) — reference for the DSH plugin structure and provider registration.
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](./LICENSE), retaining the original author's copyright notice.

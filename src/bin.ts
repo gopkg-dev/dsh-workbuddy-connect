@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { WorkBuddyCredentialStore, workbuddyOwnAuthPath } from './auth.ts'
 import { WorkBuddyUpstreamClient } from './upstream.ts'
 import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS } from './catalog.ts'
-import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
+import { WORKBUDDY_CONNECT_PACKAGE, WORKBUDDY_CONNECT_VERSION } from './version.ts'
 import { isHeartbeatProcessAlive, readHostHeartbeat, workbuddyHostHeartbeatPath } from './host-heartbeat.ts'
 import { CN_VARIANT, variantFor, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
 import { resolveAppVersion } from './app-version.ts'
@@ -72,7 +72,7 @@ async function doctor(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<n
   const appVersion = variant.region === 'global' ? await resolveAppVersion() : undefined
   const report = {
     schemaVersion: JSON_SCHEMA_VERSION,
-    package: 'dsh-workbuddy-connect',
+    package: WORKBUDDY_CONNECT_PACKAGE,
     version: WORKBUDDY_CONNECT_VERSION,
     node: process.version,
     provider: variant.id,
@@ -129,7 +129,7 @@ async function status(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<n
   const hostState = hostAlive ? 'running' : heartbeat !== undefined ? 'stale' : 'not-started'
   if (authStatus.state !== 'signed-in') {
     if (jsonOutput) {
-      printJson({ schemaVersion: JSON_SCHEMA_VERSION, package: 'dsh-workbuddy-connect', version: WORKBUDDY_CONNECT_VERSION, provider: variant.id, status: 'signed-out', hostBundle: hostState })
+      printJson({ schemaVersion: JSON_SCHEMA_VERSION, package: WORKBUDDY_CONNECT_PACKAGE, version: WORKBUDDY_CONNECT_VERSION, provider: variant.id, status: 'signed-out', hostBundle: hostState })
     } else {
       process.stdout.write(`${variant.displayName} Connect: signed out\nHost bundle: ${hostState}\n`)
     }
@@ -146,7 +146,7 @@ async function status(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<n
   if (jsonOutput) {
     printJson({
       schemaVersion: JSON_SCHEMA_VERSION,
-      package: 'dsh-workbuddy-connect',
+      package: WORKBUDDY_CONNECT_PACKAGE,
       version: WORKBUDDY_CONNECT_VERSION,
       provider: variant.id,
       status: 'signed-in',

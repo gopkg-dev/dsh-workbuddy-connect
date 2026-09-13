@@ -15,7 +15,7 @@ import { execFileSync } from 'node:child_process'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
-import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
+import { WORKBUDDY_CONNECT_PACKAGE, WORKBUDDY_CONNECT_VERSION } from './version.ts'
 
 /** Basename of the host heartbeat file inside the Harness home. */
 export const WORKBUDDY_HOST_HEARTBEAT_FILENAME = '.workbuddy-host-heartbeat.json'
@@ -26,7 +26,7 @@ const HEARTBEAT_FORMAT_VERSION = 1
 /** On-disk shape of the heartbeat. */
 export interface WorkBuddyHostHeartbeat {
   version: typeof HEARTBEAT_FORMAT_VERSION
-  package: 'dsh-workbuddy-connect'
+  package: string
   pluginVersion: string
   /** Epoch milliseconds when the host registered the provider. */
   registeredAt: number
@@ -47,7 +47,7 @@ export function workbuddyHostHeartbeatPath(): string {
 export async function writeHostHeartbeat(): Promise<void> {
   const document: WorkBuddyHostHeartbeat = {
     version: HEARTBEAT_FORMAT_VERSION,
-    package: 'dsh-workbuddy-connect',
+    package: WORKBUDDY_CONNECT_PACKAGE,
     pluginVersion: WORKBUDDY_CONNECT_VERSION,
     registeredAt: Date.now(),
     pid: process.pid,
@@ -80,13 +80,13 @@ export async function readHostHeartbeat(): Promise<WorkBuddyHostHeartbeat | unde
     const parsed = JSON.parse(raw) as Partial<WorkBuddyHostHeartbeat>
     if (
       parsed.version === HEARTBEAT_FORMAT_VERSION
-      && parsed.package === 'dsh-workbuddy-connect'
+      && (parsed.package === WORKBUDDY_CONNECT_PACKAGE || parsed.package === 'dsh-workbuddy-connect')
       && typeof parsed.registeredAt === 'number'
       && typeof parsed.pid === 'number'
     ) {
       return {
         version: HEARTBEAT_FORMAT_VERSION,
-        package: 'dsh-workbuddy-connect',
+        package: parsed.package,
         pluginVersion: typeof parsed.pluginVersion === 'string' ? parsed.pluginVersion : 'unknown',
         registeredAt: parsed.registeredAt,
         pid: parsed.pid,

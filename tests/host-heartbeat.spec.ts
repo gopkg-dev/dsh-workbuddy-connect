@@ -11,7 +11,7 @@ import {
   writeHostHeartbeat,
   WORKBUDDY_HOST_HEARTBEAT_FILENAME,
 } from '../src/host-heartbeat.ts'
-import { WORKBUDDY_CONNECT_VERSION } from '../src/version.ts'
+import { WORKBUDDY_CONNECT_PACKAGE, WORKBUDDY_CONNECT_VERSION } from '../src/version.ts'
 
 let root: string | undefined
 
@@ -34,7 +34,7 @@ describe('host heartbeat', () => {
     // After write: present and well-formed.
     const heartbeat = await readHostHeartbeat()
     expect(heartbeat).toBeDefined()
-    expect(heartbeat!.package).toBe('dsh-workbuddy-connect')
+    expect(heartbeat!.package).toBe(WORKBUDDY_CONNECT_PACKAGE)
     expect(heartbeat!.pid).toBe(process.pid)
     expect(typeof heartbeat!.registeredAt).toBe('number')
     expect(heartbeat!.pluginVersion).toBe(WORKBUDDY_CONNECT_VERSION)
@@ -52,6 +52,16 @@ describe('host heartbeat', () => {
     // Clear removes the file.
     await clearHostHeartbeat()
     expect(await readHostHeartbeat()).toBeUndefined()
+  })
+
+  it('continues to read a heartbeat left by the upstream package', async () => {
+    root = await mkdtemp(join(tmpdir(), 'wb-heartbeat-upstream-'))
+    vi.stubEnv('DSH_HOME', root)
+    const { writeFile } = await import('node:fs/promises')
+    await writeFile(workbuddyHostHeartbeatPath(), JSON.stringify({
+      version: 1, package: 'dsh-workbuddy-connect', pluginVersion: '0.5.0', registeredAt: Date.now(), pid: process.pid,
+    }), 'utf8')
+    expect(await readHostHeartbeat()).toMatchObject({ package: 'dsh-workbuddy-connect', pluginVersion: '0.5.0' })
   })
 
   it('detects a recycled PID as dead (registeredAt after this process started)', async () => {

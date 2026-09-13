@@ -10,6 +10,11 @@
  * to define it (falls back to a clearly-dev marker).
  */
 declare const __DSH_WORKBUDDY_VERSION__: string
+declare const __DSH_WORKBUDDY_PACKAGE__: string
+
+/** Published package name; the standalone CLI command keeps its original name. */
+export const WORKBUDDY_CONNECT_PACKAGE: string =
+  typeof __DSH_WORKBUDDY_PACKAGE__ === 'string' ? __DSH_WORKBUDDY_PACKAGE__ : 'dsh-workbuddy-connect-dev'
 
 export const WORKBUDDY_CONNECT_VERSION: string =
   typeof __DSH_WORKBUDDY_VERSION__ === 'string' ? __DSH_WORKBUDDY_VERSION__ : '0.0.0-dev'

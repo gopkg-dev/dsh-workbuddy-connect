@@ -1,15 +1,17 @@
 import { readFileSync } from 'node:fs'
 import type { UserConfig } from 'tsdown'
 
-const PLUGIN_ID = 'dsh-workbuddy-connect'
-
-/** Read the npm version once so the build injects it into src/version.ts. */
-const PACKAGE_VERSION = JSON.parse(
+/** Package identity drives both the browser loader and runtime diagnostics. */
+const PACKAGE = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
-).version as string
+) as { name: string; version: string }
+const PLUGIN_ID = PACKAGE.name
 
 /** Build-time define map; `src/version.ts` reads `__DSH_WORKBUDDY_VERSION__`. */
-const VERSION_DEFINE = { __DSH_WORKBUDDY_VERSION__: JSON.stringify(PACKAGE_VERSION) }
+const VERSION_DEFINE = {
+  __DSH_WORKBUDDY_VERSION__: JSON.stringify(PACKAGE.version),
+  __DSH_WORKBUDDY_PACKAGE__: JSON.stringify(PACKAGE.name),
+}
 
 const CLIENT_EXTERNALS = [
   'react',
